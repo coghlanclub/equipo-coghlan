@@ -53,8 +53,18 @@ export function pantallaLogin(cont, { titulo, texto }) {
     ${DEMO ? '<p class="sub">Modo demo: vas a poder elegir con qué persona de ejemplo entrar.</p>' : ''}
   </div></div>`;
   $('#btn-entrar', cont).onclick = async () => {
-    try { await entrar(); } catch (e) { console.error(e); toast('No se pudo iniciar sesión. Probá de nuevo.', true); }
+    try { await entrar(); } catch (e) { console.error(e); toast(errorLogin(e), true); }
   };
+}
+
+// Explica en palabras simples por qué falló el inicio de sesión
+function errorLogin(e) {
+  return ({
+    'auth/operation-not-allowed': 'El inicio de sesión con Google no está activado en Firebase (Authentication → Método de acceso → Google).',
+    'auth/unauthorized-domain': `Este sitio (${location.hostname}) no está autorizado en Firebase (Authentication → Configuración → Dominios autorizados).`,
+    'auth/popup-closed-by-user': 'Cerraste la ventana de Google antes de terminar. Probá de nuevo.',
+    'auth/network-request-failed': 'Sin conexión a internet. Revisá el wifi y probá de nuevo.',
+  })[e?.code] || 'No se pudo iniciar sesión. Probá de nuevo.';
 }
 
 // Prepara datos de ejemplo y la cinta de "modo demo"
