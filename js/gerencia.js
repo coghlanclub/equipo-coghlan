@@ -163,7 +163,15 @@ function estadoCenso() {
   return { filas, sueltos };
 }
 const linkCenso = () => new URL('profesor.html', location.href).href;
-const msjCenso = nombre => `Hola${nombre ? ' ' + nombre.split(' ')[0] : ''}! Estamos haciendo el censo del personal de Coghlan Club. Completá tu ficha acá, te lleva 5 minutos: ${linkCenso()}\n\nEntrás con tu cuenta de Google y cargás tus datos, tus clases u horarios y cuándo podés cubrir reemplazos. Después guardá la app en la pantalla de inicio del celular para fichar. ¡Gracias!`;
+const msjCenso = nombre => `Hola${nombre ? ' ' + nombre.split(' ')[0] : ''}! Estamos haciendo el censo del personal de Coghlan Club. Completá tu ficha acá, te lleva 5 minutos: ${linkCenso()}
+
+1) Abrí el link en *Chrome* (Android) o *Safari* (iPhone), no dentro de WhatsApp: mantené apretado el link → Copiar → pegalo en el navegador.
+2) Guardá la app en la pantalla de inicio:
+   • iPhone (Safari): Compartir ⬆️ → *Agregar a inicio* → Agregar.
+   • Android (Chrome): menú ⋮ → *Agregar a la pantalla principal* o *Instalar app*.
+3) Abrí la app desde el ícono, entrá con tu cuenta de Google y cargá tus datos, tus clases u horarios y cuándo podés cubrir.
+
+Desde esa app vas a fichar con el QR de recepción. ¡Gracias!`;
 
 function vCenso(v) {
   const { filas, sueltos } = estadoCenso();

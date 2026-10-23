@@ -281,3 +281,22 @@ td.num, th.num { text-align: right; }
 .guia-puntos span { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
 .guia-puntos span.on { background: var(--accent); }
 @media (prefers-reduced-motion: reduce) { .guia-foco, .guia-card { transition: none; } }
+
+/* Guardar la app en la pantalla de inicio */
+.inst-pestanas { display: flex; gap: 6px; flex-wrap: wrap; }
+.inst-pestanas .check[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.inst-pasos { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.inst-paso { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: start; font-size: .95rem; }
+.inst-n { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-weight: 800; }
+.inst-boton { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; padding: 2px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--info); font-weight: 700; white-space: nowrap; }
+.inst-boton span { color: var(--fg); font-size: .85rem; }
+.inst-tarjeta .acciones { margin-top: 6px; }
+
+/* Celulares: textos de formularios en 16px (iPhone no hace zoom) y botones fáciles de tocar */
+@media (max-width: 700px) {
+  input, select, textarea { font-size: 16px; }
+  .btn { min-height: 44px; }
+  .btn.sm { min-height: 38px; }
+  .barra .der > .sub { display: none; }
+  main { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+}

@@ -45,7 +45,7 @@ export async function copiar(texto, el) {
 
 const G_SVG = `<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>`;
 
-export function pantallaLogin(cont, { titulo, texto }) {
+export function pantallaLogin(cont, { titulo, texto, extra = '' }) {
   cont.innerHTML = `<div class="login"><div class="caja">
     <img src="img/logo-40.png" alt="Coghlan Club · 40 aniversario" width="120" height="120" style="border-radius:50%;justify-self:start">
     <div class="marca">coghlan<b>club</b><small>Equipo</small></div>
@@ -54,6 +54,7 @@ export function pantallaLogin(cont, { titulo, texto }) {
       <span>Estás en el navegador de WhatsApp, Instagram o Facebook, y Google no deja iniciar sesión desde acá. Tocá el menú <b>⋮</b> o <b>···</b> y elegí <b>"Abrir en Chrome"</b> o <b>"Abrir en Safari"</b>. O copiá el link y pegalo en el navegador.</span>
       <button class="btn sm ghost" id="copiar-link" style="justify-self:start">Copiar link</button></div></div>` : ''}
     <button class="btn grande btn-google" id="btn-entrar">${G_SVG} Entrar con Google</button>
+    ${extra}
     ${DEMO ? '<p class="sub">Modo demo: vas a poder elegir con qué persona de ejemplo entrar.</p>' : ''}
   </div></div>`;
   $('#copiar-link', cont)?.addEventListener('click', () => copiar(location.href));
@@ -101,33 +102,6 @@ export function idDispositivo() {
   try { let v = localStorage.getItem(K); if (!v) { v = tokenAleatorio(); localStorage.setItem(K, v); } return v; }
   catch { return (window.__disp = window.__disp || tokenAleatorio()); }
 }
-
-// Instalar en la pantalla de inicio
-let avisoInstalar = null;
-try { addEventListener('beforeinstallprompt', e => { e.preventDefault(); avisoInstalar = e; document.querySelectorAll('[data-instalar]').forEach(b => { b.hidden = false; }); }); } catch { /* nada */ }
-export function ayudaInstalar() {
-  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  const instalada = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-  if (instalada) return '';
-  return `<div class="aviso info"><div><b>Guardá la app en la pantalla de inicio</b>
-    ${ios
-      ? `<span>En iPhone tiene que estar abierta en <b>Safari</b>:</span>
-         <span>1. Tocá <b>Compartir</b> (el cuadrado con la flecha hacia arriba, abajo en el centro).</span>
-         <span>2. Bajá y tocá <b>Agregar a inicio</b>.</span>
-         <span>3. Tocá <b>Agregar</b>. Queda el ícono rojo de Coghlan Club.</span>`
-      : `<button class="btn" data-instalar ${avisoInstalar ? '' : 'hidden'} style="justify-self:start">Instalar la app</button>
-         <span>Si no aparece el botón, en <b>Chrome</b>:</span>
-         <span>1. Tocá el menú <b>⋮</b> (arriba a la derecha).</span>
-         <span>2. Tocá <b>Instalar app</b> o <b>Agregar a pantalla principal</b>.</span>
-         <span>3. Confirmá. Queda el ícono rojo de Coghlan Club.</span>`}
-    <span class="sub">Después abrí siempre desde ese ícono.</span></div></div>`;
-}
-try {
-  document.addEventListener('click', async e => {
-    if (!e.target.closest('[data-instalar]') || !avisoInstalar) return;
-    avisoInstalar.prompt(); await avisoInstalar.userChoice.catch(() => {}); avisoInstalar = null;
-  });
-} catch { /* nada */ }
 
 // ---------- Ficha ----------
 export function chipsRoles(p) { return (p.roles || []).map(r => `<span class="rol rol-${r}">${ROL_CORTO[r]}</span>`).join(' '); }

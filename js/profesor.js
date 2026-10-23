@@ -4,7 +4,8 @@ import {
   esc, hoy, mesDe, MESES, ESTADOS, rangoTexto, diasEntre, fechaLarga, nombreCompleto, mailto, mailSolicitud, jornadas, agenda,
   horaDe, fmtMin, ms, queCubre, TOLERANCIA_TARDE, hhmm, deIso, sumarDias, iso, modeloDispositivo, fechaCorta,
 } from './logica.js';
-import { $, toast, modal, cabModal, confirmar, copiar, pantallaLogin, prepararDemo, registrarApp, ayudaInstalar, htmlFicha, htmlAgenda, idDispositivo } from './ui.js';
+import { $, toast, modal, cabModal, confirmar, copiar, pantallaLogin, prepararDemo, registrarApp, htmlFicha, htmlAgenda, idDispositivo } from './ui.js';
+import { ayudaInstalar, iosEnNavegador } from './instalar.js';
 import { censoProfe } from './censo-form.js';
 import { htmlConsentimiento } from './consentimiento.js';
 import { flujoFichar, fichajesDeHoy } from './fichaje.js';
@@ -22,7 +23,7 @@ registrarApp();
 
 alCambiarUsuario(u => {
   limpiar(); S.user = u; S.persona = undefined;
-  if (!u) return pantallaLogin(app, { titulo: 'Mi ficha', texto: 'Entrá con tu cuenta de Google para ver tus horarios, fichar y pedir vacaciones o ausencias.' });
+  if (!u) return pantallaLogin(app, { titulo: 'Mi ficha', texto: 'Entrá con tu cuenta de Google para ver tus horarios, fichar y pedir vacaciones o ausencias.', extra: ayudaInstalar({ antesDeEntrar: true }) });
   app.innerHTML = '<main><p class="sub">Cargando…</p></main>';
   const e = u.email;
   subs.push(
@@ -58,9 +59,10 @@ function render() {
     return enlazarBarra();
   }
   // Un solo celular por persona: el primero queda vinculado; para cambiarlo, habilita gerencia.
+  // En iPhone, Safari y la app guardada no comparten datos: solo se vincula desde el ícono.
   const miId = idDispositivo();
-  if (p.dispositivo && p.dispositivo !== miId) return renderBloqueado(p, miId);
-  if (!p.dispositivo && !vinculando) {
+  if (p.dispositivo && p.dispositivo !== miId) return iosEnNavegador() ? renderAbrirDesdeIcono(p) : renderBloqueado(p, miId);
+  if (!p.dispositivo && !vinculando && !iosEnNavegador()) {
     vinculando = true;
     actualizar('personal', p.email, { dispositivo: miId, dispositivoModelo: modeloDispositivo(navigator.userAgent), dispositivoDesde: Date.now() })
       .catch(e => console.error(e)).finally(() => { vinculando = false; });
@@ -69,6 +71,17 @@ function render() {
   renderPrincipal(p);
 }
 let vinculando = false;
+
+// iPhone en Safari con la cuenta ya vinculada (casi siempre desde la app guardada en este mismo iPhone)
+function renderAbrirDesdeIcono(p) {
+  app.innerHTML = barra() + `<main><div class="panel" style="max-width:560px">
+    <span class="eyebrow">Abrí la app desde el ícono</span><h1>Usá la app guardada</h1>
+    <p class="sub">Estás en Safari. En iPhone, la app funciona desde el <b>ícono del logo de los 40 años</b> en tu pantalla de inicio. Cerrá Safari y abrila desde ahí.</p>
+    <button class="btn grande" data-guia-instalar>No la tengo guardada: ver cómo</button>
+    <p class="sub">Si cambiaste de celular, entrá desde el ícono en el celular nuevo y pedí a gerencia que lo habilite.</p>
+  </div></main>`;
+  enlazarBarra();
+}
 
 function renderBloqueado(p, miId) {
   const pedido = p.pedidoDispositivo?.id === miId;
@@ -95,7 +108,9 @@ function renderCenso(previa = {}) {
       try {
         await guardar('personal', S.user.email, {
           ...resto, email: S.user.email, clasesDeclaradas: clases, estado: 'pendiente', creado: previa.creado || AHORA, actualizado: AHORA,
-          dispositivo: previa.dispositivo || idDispositivo(), dispositivoModelo: previa.dispositivoModelo || modeloDispositivo(navigator.userAgent), dispositivoDesde: previa.dispositivoDesde || Date.now(),
+          // el celular se vincula acá salvo en iPhone desde Safari (ahí se vincula al abrir desde el ícono)
+          ...(previa.dispositivo ? { dispositivo: previa.dispositivo, dispositivoModelo: previa.dispositivoModelo, dispositivoDesde: previa.dispositivoDesde }
+            : iosEnNavegador() ? {} : { dispositivo: idDispositivo(), dispositivoModelo: modeloDispositivo(navigator.userAgent), dispositivoDesde: Date.now() }),
         });
         toast('Ficha enviada a gerencia');
       } catch (e) { console.error(e); toast('No se pudo guardar. Revisá la conexión y probá de nuevo.', true); throw e; }
@@ -139,14 +154,17 @@ function renderPrincipal(p) {
 
   app.innerHTML = barra() + `<main>
     <div class="cab"><div><span class="eyebrow">${fechaLarga(h)}</span><h1>Hola, ${esc(p.nombre)}</h1></div></div>
+    ${ayudaInstalar()}
 
     <div class="panel" style="gap:14px" id="p-fichar">
       <div class="cab"><div><h3>Fichar</h3>
         <p class="sub">${ult ? `Última marca hoy: <b>${ult.tipo}</b> a las <span class="mono">${horaDe(ult.ts)}</span>` : 'Todavía no marcaste hoy.'}
         ${hoyAg.length ? ` · Hoy entrás <span class="mono">${hoyAg[0].desde}</span>` : ''}</p></div>
         <span class="pill ${dentro ? 'activo' : 'neutro'}">${dentro ? 'En el club' : 'Fuera del club'}</span></div>
-      <button class="btn grande bloque" id="fichar">${dentro ? 'Fichar salida' : 'Fichar entrada'} · escanear QR</button>
-      <p class="sub">El QR está en la PC de recepción y cambia cada 30 segundos.</p>
+      ${iosEnNavegador()
+        ? '<button class="btn grande bloque" data-guia-instalar>Para fichar, abrí la app desde el ícono</button><p class="sub">En iPhone se ficha desde la app guardada en la pantalla de inicio. Tocá el botón para ver cómo guardarla.</p>'
+        : `<button class="btn grande bloque" id="fichar">${dentro ? 'Fichar salida' : 'Fichar entrada'} · escanear QR</button>
+      <p class="sub">El QR está en la PC de recepción y cambia cada 30 segundos.</p>`}
     </div>
 
     <div class="grid-2">
@@ -180,12 +198,11 @@ function renderPrincipal(p) {
         <div class="panel" id="p-ficha">${htmlFicha(p, S.clases)}
           <div class="acciones"><button class="btn sm ghost" id="editar-tel">Cambiar teléfono</button><button class="btn sm ghost" id="actualizar-ficha">Avisar cambios de horario</button><button class="btn sm ghost" id="ver-consent">Mi consentimiento</button></div>
         </div>
-        ${ayudaInstalar()}
       </div>
     </div>
   </main>`;
   enlazarBarra();
-  $('#fichar').onclick = () => flujoFichar(p);
+  $('#fichar')?.addEventListener('click', () => flujoFichar(p));
   $('#pedir-vac').onclick = () => abrirSolicitud('vacaciones');
   $('#pedir-aus').onclick = () => abrirSolicitud('ausencia');
   $('#editar-tel').onclick = editarTelefono;
@@ -303,6 +320,9 @@ registrarGuia({
       <ul><li>marcás tu entrada y salida,</li><li>pedís vacaciones o avisás si faltás,</li><li>ves tu horario, tus reemplazos y tus horas del mes.</li></ul>
       <p>Te mostramos para qué sirve cada parte. Son menos de un minuto.</p>`,
       tip: 'Podés avanzar con las flechas del teclado o salir con Esc.' },
+    { sel: '.inst-tarjeta', opcional: true, titulo: 'Guardá la app en tu celular', texto: `<p>Primero, guardala en la pantalla de inicio: queda con el ícono de Coghlan Club y la abrís con un toque.</p>
+      <p>Tocá <b>"Ver cómo guardarla"</b> y seguí los pasos de tu celular (iPhone o Android).</p>`,
+      tip: 'En iPhone, fichá siempre desde el ícono: desde Safari no se puede.' },
     { sel: '#fichar', titulo: 'Fichar entrada y salida', texto: `<p>Tocalo <b>al llegar</b> y <b>al irte</b>. Se abre la cámara: apuntá al QR que está en la <b>PC de recepción</b>.</p>
       <p>Cuando estás adentro, el botón cambia a <b>"Fichar salida"</b> y arriba dice <b>"En el club"</b>.</p>`,
       tip: 'El QR cambia cada 30 segundos, así que no sirve una foto. Si te dice "venció", escaneá de nuevo.' },
@@ -319,6 +339,6 @@ registrarGuia({
     { sel: '#p-ficha', titulo: 'Tu ficha y tu horario', texto: `<p>Tus datos, tu contacto de emergencia y tu <b>horario semanal</b>.</p>
       <ul><li><b>Cambiar teléfono</b>: si cambiaste de número.</li><li><b>Avisar cambios de horario</b>: si tus clases o tu turno cambiaron.</li><li><b>Mi consentimiento</b>: el permiso de datos que firmaste.</li></ul>` },
     { sel: '[data-guia]', titulo: '¿Te olvidaste algo?', texto: '<p>Tocá <b>"? Guía"</b> cuando quieras para ver esta explicación de nuevo.</p>',
-      tip: 'Guardá la app en la pantalla de inicio del celular: así la abrís con un toque, como cualquier otra app.' },
+      tip: 'Si todavía no guardaste la app en la pantalla de inicio, buscá arriba "Ver cómo guardarla".' },
   ],
 });
