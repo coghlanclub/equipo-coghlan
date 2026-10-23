@@ -47,15 +47,23 @@ const G_SVG = `<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" 
 
 export function pantallaLogin(cont, { titulo, texto }) {
   cont.innerHTML = `<div class="login"><div class="caja">
+    <img src="img/logo-40.png" alt="Coghlan Club · 40 aniversario" width="120" height="120" style="border-radius:50%;justify-self:start">
     <div class="marca">coghlan<b>club</b><small>Equipo</small></div>
     <div style="display:grid;gap:8px"><h1>${titulo}</h1><p class="sub">${texto}</p></div>
+    ${navegadorInterno() ? `<div class="aviso"><div><b>Abrí este link en Chrome o Safari</b>
+      <span>Estás en el navegador de WhatsApp, Instagram o Facebook, y Google no deja iniciar sesión desde acá. Tocá el menú <b>⋮</b> o <b>···</b> y elegí <b>"Abrir en Chrome"</b> o <b>"Abrir en Safari"</b>. O copiá el link y pegalo en el navegador.</span>
+      <button class="btn sm ghost" id="copiar-link" style="justify-self:start">Copiar link</button></div></div>` : ''}
     <button class="btn grande btn-google" id="btn-entrar">${G_SVG} Entrar con Google</button>
     ${DEMO ? '<p class="sub">Modo demo: vas a poder elegir con qué persona de ejemplo entrar.</p>' : ''}
   </div></div>`;
+  $('#copiar-link', cont)?.addEventListener('click', () => copiar(location.href));
   $('#btn-entrar', cont).onclick = async () => {
     try { await entrar(); } catch (e) { console.error(e); toast(errorLogin(e), true); }
   };
 }
+
+// Navegadores de apps (WhatsApp, Instagram, Facebook…): Google no permite iniciar sesión dentro de ellos
+const navegadorInterno = () => /FBAN|FBAV|FB_IAB|Instagram|WhatsApp|Line\/|TikTok|musical_ly|Snapchat|; wv\)/i.test(navigator.userAgent);
 
 // Explica en palabras simples por qué falló el inicio de sesión
 function errorLogin(e) {
@@ -64,6 +72,8 @@ function errorLogin(e) {
     'auth/unauthorized-domain': `Este sitio (${location.hostname}) no está autorizado en Firebase (Authentication → Configuración → Dominios autorizados).`,
     'auth/popup-closed-by-user': 'Cerraste la ventana de Google antes de terminar. Probá de nuevo.',
     'auth/network-request-failed': 'Sin conexión a internet. Revisá el wifi y probá de nuevo.',
+    'auth/web-storage-unsupported': 'El navegador tiene bloqueadas las cookies. Abrí el link en Chrome o Safari normal (no en modo incógnito).',
+    'auth/operation-not-supported-in-this-environment': 'Este navegador no deja iniciar sesión. Abrí el link en Chrome o Safari.',
   })[e?.code] || 'No se pudo iniciar sesión. Probá de nuevo.';
 }
 

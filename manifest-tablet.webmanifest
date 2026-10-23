@@ -5,7 +5,7 @@
   "start_url": "./tablet.html",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#1b1a1e",
+  "background_color": "#000000",
   "theme_color": "#1b1a1e",
   "lang": "es-AR",
   "icons": [
@@ -18,7 +18,13 @@
       "src": "img/icono-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "img/icono-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
