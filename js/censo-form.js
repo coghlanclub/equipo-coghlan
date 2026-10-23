@@ -15,7 +15,9 @@ const ROL_TXT = {
   limpieza: 'Hago la limpieza en un horario fijo',
 };
 
-export function censoProfe(cont, { persona = {}, clases = [], barra = '', alEnviar, alSalir }) {
+// email: quien completa · alAgregarClase(datos) crea una clase en la grilla y devuelve su id
+// alQuitarClase(id) la borra (solo las que cargó esta persona). Devuelve { actualizarClases } para la grilla en vivo.
+export function censoProfe(cont, { persona = {}, clases = [], email = '', barra = '', alEnviar, alSalir, alAgregarClase, alQuitarClase }) {
   const d = {
     nombre: persona.nombre || '', apellido: persona.apellido || '', telefono: persona.telefono || '',
     emergenciaNombre: persona.emergenciaNombre || '', emergenciaTel: persona.emergenciaTel || '', direccion: persona.direccion || '',
@@ -43,7 +45,7 @@ export function censoProfe(cont, { persona = {}, clases = [], barra = '', alEnvi
     }
     if (paso === 1 && !d.roles.length) { toast('Elegí al menos un rol', true); return false; }
     if (paso === 2) {
-      if (d.roles.includes('clases') && !d.clases.length) { toast('Tocá en la grilla las clases que das', true); return false; }
+      if (d.roles.includes('clases') && !d.clases.length) { toast('Marcá o agregá al menos una clase que das', true); return false; }
       const rt = d.roles.filter(r => ROLES_TURNO.includes(r));
       const sinTurno = rt.filter(r => !d.horarios.some(h => h.rol === r));
       if (sinTurno.length) { toast('Cargá tu horario de ' + sinTurno.map(r => ROL_CORTO[r].toLowerCase()).join(' y '), true); return false; }
@@ -93,7 +95,10 @@ export function censoProfe(cont, { persona = {}, clases = [], barra = '', alEnvi
     if (quiereClases) {
       const delDia = clases.filter(c => c.dia === diaGrilla).sort((a, b) => a.desde.localeCompare(b.desde));
       const marcadas = clases.filter(c => d.clases.includes(c.id)).sort((a, b) => a.dia - b.dia || a.desde.localeCompare(b.desde));
-      h += `<div style="display:grid;gap:10px"><b>Tocá las clases que das hoy</b>
+      const quien = c => c.profesor === email ? 'vos' : c.profesorNombre || '';
+      const actividades = [...new Set([...ACTIVIDADES_BASE, ...clases.map(c => c.actividad)])].sort((a, b) => a.localeCompare(b));
+      h += `<div style="display:grid;gap:10px"><b>Elegí el día y tocá las clases que das</b>
+        <span class="sub">La grilla la van armando los profes. Si tu clase no está, agregala abajo.</span>
         <div class="seg dias" role="group" aria-label="Día">${DIAS_LABORABLES.map(x => {
           const n = clases.filter(c => c.dia === x && d.clases.includes(c.id)).length;
           return `<button type="button" data-dia="${x}" aria-pressed="${x === diaGrilla}">${DIAS_CORTOS[x]}${n ? `<span class="cuenta">${n}</span>` : ''}</button>`;
@@ -102,10 +107,24 @@ export function censoProfe(cont, { persona = {}, clases = [], barra = '', alEnvi
           const cs = delDia.filter(c => c.sede === sede);
           return cs.length ? `<div style="display:grid;gap:6px"><span class="eyebrow">${sede}</span>${cs.map(c => `
             <button type="button" class="opcion fina ${d.clases.includes(c.id) ? 'sel' : ''}" data-clase="${c.id}" aria-pressed="${d.clases.includes(c.id)}">
-              <span class="tilde">${d.clases.includes(c.id) ? '✓' : ''}</span><span class="mono">${c.desde}</span><b>${esc(c.actividad)}</b></button>`).join('')}</div>` : '';
-        }).join('') || '<p class="vacio">Ese día no hay clases.</p>'}
-        <div class="panel" style="padding:12px;gap:6px;background:var(--bg)"><b>Marcaste ${marcadas.length} clase${marcadas.length === 1 ? '' : 's'}</b>
-          ${marcadas.length ? `<span class="sub">${marcadas.map(c => `${DIAS_CORTOS[c.dia]} ${c.desde} ${esc(c.actividad)}`).join(' · ')}</span>` : '<span class="sub">Elegí el día arriba y tocá tus clases.</span>'}</div>
+              <span class="tilde">${d.clases.includes(c.id) ? '✓' : ''}</span><span class="mono">${c.desde}</span><b>${esc(c.actividad)}</b>${quien(c) ? `<span class="sub" style="margin-left:auto">${esc(quien(c))}</span>` : ''}</button>`).join('')}</div>` : '';
+        }).join('') || `<p class="vacio">Todavía no hay clases cargadas el ${DIAS[diaGrilla].toLowerCase()}.</p>`}
+
+        <div class="panel" style="padding:12px;gap:10px;background:var(--bg)" id="nueva-clase">
+          <b>+ Agregar una clase que doy</b>
+          <span class="sub">Se suma a la grilla del club con tu nombre, al instante.</span>
+          <label>Actividad<input id="n-act" list="n-acts" placeholder="Ej.: Funcional, Calistenia, Muay Thai" autocomplete="off"></label>
+          <datalist id="n-acts">${actividades.map(a => `<option value="${esc(a)}">`).join('')}</datalist>
+          <label>Dónde<select id="n-sede">${SEDES.map(x => `<option>${x}</option>`).join('')}</select></label>
+          <span class="sub">Qué días</span>
+          <div class="checks" id="n-dias">${DIAS_LABORABLES.map(x => `<label class="check"><input type="checkbox" value="${x}" ${x === diaGrilla ? 'checked' : ''}> ${DIAS_CORTOS[x]}</label>`).join('')}</div>
+          <div class="fila"><label>Desde<input id="n-desde" type="time" value="18:00" step="900"></label><label>Hasta<input id="n-hasta" type="time" value="19:00" step="900"></label></div>
+          <button type="button" class="btn" id="n-agregar">Agregar clase</button>
+        </div>
+
+        <div class="panel" style="padding:12px;gap:6px;background:var(--bg)"><b>Tus clases: ${marcadas.length}</b>
+          ${marcadas.length ? `<div class="lista">${marcadas.map(c => `<div class="item"><span><b>${DIAS_CORTOS[c.dia]}</b> <span class="mono">${c.desde}–${c.hasta}</span> ${esc(c.actividad)} <span class="sub">(${c.sede})</span></span><button type="button" class="btn sm ghost" data-sacar="${c.id}" aria-label="Sacar ${esc(c.actividad)}">Sacar</button></div>`).join('')}</div>`
+            : '<span class="sub">Tocá tus clases en la grilla o agregalas.</span>'}</div>
         <details><summary style="cursor:pointer;font-weight:600">¿Sabés dar otras actividades? (opcional)</summary>
           <div class="checks" style="margin-top:8px">${ACTIVIDADES_BASE.map(a => `<label class="check"><input type="checkbox" name="extra" value="${esc(a)}" ${d.actividadesExtra.includes(a) ? 'checked' : ''}> ${esc(a)}</label>`).join('')}</div>
           <span class="sub">Sirve para que te llamen si hace falta un reemplazo.</span></details>
@@ -178,6 +197,42 @@ export function censoProfe(cont, { persona = {}, clases = [], barra = '', alEnvi
       const id = b.dataset.clase; d.clases = d.clases.includes(id) ? d.clases.filter(x => x !== id) : [...d.clases, id];
       const y = scrollY; render(); scrollTo(0, y);
     });
+    // Sacar una clase de la lista: si la cargó esta persona, se borra de la grilla
+    cont.querySelectorAll('[data-sacar]').forEach(b => b.onclick = async () => {
+      const id = b.dataset.sacar; const c = clases.find(x => x.id === id);
+      d.clases = d.clases.filter(x => x !== id);
+      if (c?.creadaPor === email && alQuitarClase) {
+        clases = clases.filter(x => x.id !== id);
+        try { await alQuitarClase(id); } catch { toast('No se pudo sacar de la grilla', true); }
+      }
+      const y = scrollY; render(); scrollTo(0, y);
+    });
+    $('#n-agregar', cont)?.addEventListener('click', async e => {
+      const actividad = v('#n-act').replace(/\s+/g, ' '), sede = $('#n-sede', cont).value;
+      const dias = $$('#n-dias input:checked', cont).map(i => +i.value);
+      const desde = v('#n-desde'), hasta = v('#n-hasta');
+      if (actividad.length < 2) return toast('Escribí qué actividad das', true);
+      if (!dias.length) return toast('Marcá qué días', true);
+      if (!desde || !hasta || min(hasta) <= min(desde)) return toast('Revisá la hora de inicio y de fin', true);
+      const fuera = dias.filter(dia => !dentroHorarioClub({ dia, desde, hasta }));
+      if (fuera.length) return toast(`${fuera.map(x => DIAS_CORTOS[x]).join(', ')}: fuera del horario del club`, true);
+      e.target.disabled = true;
+      const nombre = `${d.nombre} ${d.apellido}`.trim();
+      try {
+        for (const dia of dias) {
+          // si ya existe esa misma clase en la grilla, se marca en lugar de duplicarla
+          const igual = clases.find(c => c.dia === dia && c.desde === desde && c.sede === sede && c.actividad.toLowerCase() === actividad.toLowerCase());
+          if (igual) { if (!d.clases.includes(igual.id)) d.clases.push(igual.id); continue; }
+          const datos = { actividad, sede, dia, desde, hasta, profesor: email, profesorNombre: nombre, origen: 'profe', creadaPor: email };
+          const id = await alAgregarClase(datos);
+          clases = [...clases, { id, ...datos }];
+          d.clases.push(id);
+        }
+        toast(dias.length > 1 ? `Agregaste ${actividad} ${dias.length} días` : `Agregaste ${actividad}`);
+        diaGrilla = dias[0];
+      } catch (err) { console.error(err); toast('No se pudo agregar la clase. Revisá la conexión.', true); }
+      const y = scrollY; render(); scrollTo(0, y);
+    });
     cont.querySelectorAll('input[name=extra]').forEach(i => i.onchange = () => { d.actividadesExtra = $$('input[name=extra]:checked', cont).map(x => x.value); });
     cont.querySelectorAll('input[name=disp]').forEach(i => i.onchange = () => { d.disponible = $$('input[name=disp]:checked', cont).map(x => x.value); });
     cont.querySelectorAll('[data-quitar]').forEach(b => b.onclick = () => { d.horarios.splice(+b.dataset.quitar, 1); const y = scrollY; render(); scrollTo(0, y); });
@@ -197,4 +252,12 @@ export function censoProfe(cont, { persona = {}, clases = [], barra = '', alEnvi
     });
   }
   render();
+  // La grilla cambia en vivo (otros profes agregan clases): se actualiza sin perder lo que se está completando
+  return {
+    actualizarClases(nuevas) {
+      clases = nuevas;
+      const escribiendo = cont.contains(document.activeElement) && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+      if (paso === 2 && !escribiendo && !$('#n-act', cont)?.value) { const y = scrollY; render(); scrollTo(0, y); }
+    },
+  };
 }

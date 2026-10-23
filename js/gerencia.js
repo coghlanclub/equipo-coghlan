@@ -75,7 +75,8 @@ function necesidadesFuturas(desde = hoy(), hasta = null) {
   return out.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.desde.localeCompare(b.desde));
 }
 const sinCubrir14 = () => necesidadesFuturas(hoy(), iso(sumarDias(new Date(), 14))).filter(n => !n.r);
-const clasesSinProfe = () => S.clases.filter(c => !c.profesor || !activo(P(c.profesor)));
+// Las clases que cargó un profe con la ficha por aprobar ya cuentan como con profe
+const clasesSinProfe = () => S.clases.filter(c => !c.profesor || P(c.profesor)?.estado === 'inactivo');
 
 // ---------- Render ----------
 let raf = 0;
@@ -305,7 +306,7 @@ async function aprobarFicha(p) {
   try {
     await lote([
       { c: 'personal', id: p.email, data: { estado: 'activo', aprobado: AHORA }, merge: true },
-      ...libres.map(c => ({ c: 'clases', id: c.id, data: { profesor: p.email }, merge: true })),
+      ...libres.map(c => ({ c: 'clases', id: c.id, data: { profesor: p.email, profesorNombre: nombreCompleto(p) }, merge: true })),
     ]);
     toast(`Ficha aprobada · ${libres.length} clase(s) cargadas en la grilla`);
   } catch (e) { console.error(e); toast('No se pudo aprobar', true); }
@@ -383,13 +384,13 @@ function editarFicha(p) {
     const { clases, ...resto } = d;
     const antes = S.clases.filter(c => c.profesor === d.email).map(c => c.id);
     const ops = [{ c: 'personal', id: d.email, data: { ...resto, clasesDeclaradas: clases, actualizado: AHORA, ...(nueva ? { creado: AHORA } : {}) }, merge: true }];
-    for (const id of clases) if (!antes.includes(id)) ops.push({ c: 'clases', id, data: { profesor: d.email }, merge: true });
-    for (const id of antes) if (!clases.includes(id)) ops.push({ c: 'clases', id, data: { profesor: '' }, merge: true });
+    for (const id of clases) if (!antes.includes(id)) ops.push({ c: 'clases', id, data: { profesor: d.email, profesorNombre: nombreCompleto(d) }, merge: true });
+    for (const id of antes) if (!clases.includes(id)) ops.push({ c: 'clases', id, data: { profesor: '', profesorNombre: '' }, merge: true });
     try { await lote(ops); m.cerrar(); toast('Ficha guardada'); } catch (e) { console.error(e); toast('No se pudo guardar', true); }
   };
   $('#fe-borrar', m.el)?.addEventListener('click', async () => {
     if (!(await confirmar(`¿Eliminar la ficha de ${esc(nombreCompleto(p))}? Si dejó de trabajar, mejor marcala como Inactivo para conservar su historial.`, { si: 'Eliminar', peligro: true }))) return;
-    const ops = [{ c: 'personal', id: p.email, borrar: true }, ...S.clases.filter(c => c.profesor === p.email).map(c => ({ c: 'clases', id: c.id, data: { profesor: '' }, merge: true }))];
+    const ops = [{ c: 'personal', id: p.email, borrar: true }, ...S.clases.filter(c => c.profesor === p.email).map(c => ({ c: 'clases', id: c.id, data: { profesor: '', profesorNombre: '' }, merge: true }))];
     await lote(ops); m.cerrar(); toast('Ficha eliminada');
   });
 }
@@ -400,7 +401,9 @@ function opcionesProfe(c) {
   const saben = profes.filter(p => (p.actividades || []).includes(c.actividad));
   const otros = profes.filter(p => !(p.actividades || []).includes(c.actividad));
   const op = p => `<option value="${esc(p.email)}" ${c.profesor === p.email ? 'selected' : ''}>${esc(nombreCompleto(p))}</option>`;
-  const huerf = c.profesor && !profes.some(p => p.email === c.profesor) ? `<option value="${esc(c.profesor)}" selected>${esc(nom(c.profesor))} (inactivo)</option>` : '';
+  const pp = c.profesor && P(c.profesor);
+  const estadoProfe = !pp ? 'sin ficha todavía' : pp.estado === 'pendiente' ? 'ficha por aprobar' : 'inactivo';
+  const huerf = c.profesor && !profes.some(p => p.email === c.profesor) ? `<option value="${esc(c.profesor)}" selected>${esc(pp ? nombreCompleto(pp) : c.profesorNombre || c.profesor)} (${estadoProfe})</option>` : '';
   return `<option value="">— Sin profesor —</option>${huerf}${saben.length ? `<optgroup label="Dan ${esc(c.actividad)}">${saben.map(op).join('')}</optgroup>` : ''}${otros.length ? `<optgroup label="Otros profes de clases">${otros.map(op).join('')}</optgroup>` : ''}`;
 }
 
@@ -440,12 +443,12 @@ function grillaSemana(v) {
         <div class="act"><span>${esc(c.actividad)}</span><button data-editar-clase="${c.id}" aria-label="Editar clase">✎</button></div>
         <select data-asignar="${c.id}" aria-label="Profesor de ${esc(c.actividad)}">${opcionesProfe(c)}</select>
         ${confl.has(c.id) ? '<span class="nota">Choca con otro horario</span>' : ''}
-        ${c.profesor && !(P(c.profesor)?.actividades || []).includes(c.actividad) ? '<span class="nota">No figura que dé esta actividad</span>' : ''}
+        ${c.profesor && P(c.profesor) && c.origen !== 'profe' && !(P(c.profesor).actividades || []).includes(c.actividad) ? '<span class="nota">No figura que dé esta actividad</span>' : ''}
       </div>`).join('')}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="7"><p class="vacio">No hay clases en ${esc(S.sede)}.</p></td></tr>`}
     </tbody></table></div>`;
   $$('[data-sede]', v).forEach(b => b.onclick = () => { S.sede = b.dataset.sede; render(); });
   $$('[data-asignar]', v).forEach(s => s.onchange = async () => {
-    try { await actualizar('clases', s.dataset.asignar, { profesor: s.value }); toast(s.value ? `Asignada a ${nom(s.value)}` : 'Clase sin profesor'); }
+    try { await actualizar('clases', s.dataset.asignar, { profesor: s.value, profesorNombre: s.value ? nom(s.value) : '' }); toast(s.value ? `Asignada a ${nom(s.value)}` : 'Clase sin profesor'); }
     catch { toast('No se pudo guardar', true); }
   });
   $$('[data-editar-clase]', v).forEach(b => b.onclick = () => editarClase(S.clases.find(c => c.id === b.dataset.editarClase)));
@@ -466,7 +469,8 @@ function editarClase(c) {
     const d = { sede: $('#c-sede', m.el).value, dia: +$('#c-dia', m.el).value, actividad: $('#c-act', m.el).value.trim(), desde: $('#c-desde', m.el).value, hasta: $('#c-hasta', m.el).value, profesor: $('#c-profe', m.el).value };
     if (!d.actividad || !d.desde || !d.hasta) return toast('Completá actividad y horario', true);
     if (min(d.hasta) <= min(d.desde)) return toast('La clase tiene que terminar después de empezar', true);
-    try { await guardar('clases', c.id || idClase(d), d); m.cerrar(); toast('Clase guardada'); } catch { toast('No se pudo guardar', true); }
+    d.profesorNombre = d.profesor ? nom(d.profesor) : '';
+    try { await guardar('clases', c.id || idClase(d), { ...(c.creadaPor ? { origen: c.origen, creadaPor: c.creadaPor } : {}), ...d }); m.cerrar(); toast('Clase guardada'); } catch { toast('No se pudo guardar', true); }
   };
   $('#c-borrar', m.el)?.addEventListener('click', async () => {
     if (await confirmar(`¿Eliminar ${esc(c.actividad)} del ${DIAS[c.dia]} ${c.desde}?`, { si: 'Eliminar', peligro: true })) { await borrar('clases', c.id); m.cerrar(); toast('Clase eliminada'); }
@@ -966,7 +970,7 @@ registrarGuia({
     { sel: '[data-tab="personal"]', antes: enTab('personal'), titulo: 'Personal', texto: `<p>Las fichas de todos.</p>
       <ul><li><b>Aprobar y cargar clases</b>: acepta una ficha nueva y pasa sus clases a la grilla.</li><li><b>Habilitar celular</b>: cuando alguien cambió de teléfono.</li><li>Tocá una persona para ver su ficha, sus ausencias y sus faltas.</li></ul>` },
     { sel: '#nueva', antes: enTab('personal'), opcional: true, titulo: 'Cargar a alguien a mano', texto: '<p>Si preferís cargar una persona vos mismo, sin esperar a que complete el censo.</p>' },
-    { sel: '[data-tab="grilla"]', antes: enTab('grilla'), titulo: 'Grilla de clases', texto: `<p>La semana de clases por sede, con el profe de cada una. También hay un calendario del mes.</p>
+    { sel: '[data-tab="grilla"]', antes: enTab('grilla'), titulo: 'Grilla de clases', texto: `<p>La semana de clases por sede, con el profe de cada una. <b>La van armando los profes</b>: cuando completan el censo agregan sus clases y aparecen acá al instante, con su nombre. También hay un calendario del mes.</p>
       <ul><li><b>Rojo</b>: clase sin profesor.</li><li><b>Amarillo</b>: un profe con dos clases a la misma hora.</li></ul>`,
       tip: 'Tocá una clase para cambiarle el profe, el horario o borrarla. Con "+ Clase" sumás una nueva.' },
     { sel: '[data-tab="vacaciones"]', antes: enTab('vacaciones'), titulo: 'Vacaciones y ausencias', texto: `<p>Los pedidos que hace el personal desde su app.</p>

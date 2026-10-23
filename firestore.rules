@@ -67,10 +67,24 @@ service cloud.firestore {
       allow delete: if esAdmin();
     }
 
-    // Grilla: la ve todo el personal (para el censo), la edita gerencia.
+    // Grilla: la ve todo el personal. La arman los profes desde el censo (cada uno agrega sus clases,
+    // a su nombre, y solo puede borrar las que cargó) y gerencia la edita completa.
     match /clases/{id} {
       allow read: if logueado();
-      allow write: if esAdmin();
+      allow create: if esAdmin()
+        || (logueado()
+            && request.resource.data.keys().hasOnly(['actividad', 'sede', 'dia', 'desde', 'hasta', 'profesor', 'profesorNombre', 'origen', 'creadaPor', 'creado'])
+            && request.resource.data.origen == 'profe'
+            && request.resource.data.creadaPor == correo()
+            && request.resource.data.profesor == correo()
+            && request.resource.data.sede in ['Sede', 'Anexo', 'Aranceladas']
+            && request.resource.data.dia is int && request.resource.data.dia >= 1 && request.resource.data.dia <= 6
+            && request.resource.data.actividad is string && request.resource.data.actividad.size() >= 2 && request.resource.data.actividad.size() <= 60
+            && request.resource.data.desde is string && request.resource.data.hasta is string
+            && request.resource.data.desde.size() == 5 && request.resource.data.hasta.size() == 5
+            && request.resource.data.profesorNombre is string && request.resource.data.profesorNombre.size() <= 80);
+      allow update: if esAdmin();
+      allow delete: if esAdmin() || (logueado() && resource.data.origen == 'profe' && resource.data.creadaPor == correo());
     }
 
     // Pedidos de vacaciones y ausencias

@@ -14,6 +14,7 @@ import { waLink } from './logica.js';
 import { botonGuia, registrarGuia } from './guia.js';
 
 const app = $('#app');
+let censo = null; // censo abierto (completando o corrigiendo la ficha)
 const S = { user: null, persona: undefined, clases: [], ausencias: [], cubro: [], meCubren: [], fichajes: [], config: {} };
 let subs = [];
 const limpiar = () => { subs.forEach(u => u()); subs = []; };
@@ -22,7 +23,7 @@ await prepararDemo();
 registrarApp();
 
 alCambiarUsuario(u => {
-  limpiar(); S.user = u; S.persona = undefined;
+  limpiar(); S.user = u; S.persona = undefined; censo = null;
   if (!u) return pantallaLogin(app, { titulo: 'Mi ficha', texto: 'Entrá con tu cuenta de Google para ver tus horarios, fichar y pedir vacaciones o ausencias.', extra: ayudaInstalar({ antesDeEntrar: true }) });
   app.innerHTML = '<main><p class="sub">Cargando…</p></main>';
   const e = u.email;
@@ -52,6 +53,8 @@ function pintar() { cancelAnimationFrame(tPintar); tPintar = requestAnimationFra
 function render() {
   if (!S.user || S.persona === undefined) return;
   const p = S.persona;
+  // Mientras completa o corrige el censo, solo se actualiza la grilla (no se pierde lo que está cargando)
+  if (censo && (!p || p.estado === 'pendiente')) return censo.actualizarClases(S.clases);
   if (!p) return renderCenso();
   if (p.estado === 'pendiente') return renderPendiente(p);
   if (p.estado === 'inactivo') {
@@ -102,8 +105,11 @@ function renderBloqueado(p, miId) {
 function renderCenso(previa = {}) {
   const dn = (S.user.displayName || '').includes('@') ? '' : (S.user.displayName || '');
   const persona = { nombre: dn.split(' ')[0], apellido: dn.split(' ').slice(1).join(' '), ...previa };
-  censoProfe(app, {
-    persona, clases: S.clases, barra: barra(), alSalir: enlazarBarra,
+  censo = censoProfe(app, {
+    persona, clases: S.clases, email: S.user.email, barra: barra(), alSalir: enlazarBarra,
+    // Las clases que agrega el profe entran a la grilla al instante, a su nombre
+    alAgregarClase: datos => agregar('clases', { ...datos, creado: AHORA }),
+    alQuitarClase: id => borrar('clases', id),
     alEnviar: async ({ clases, ...resto }) => {
       try {
         await guardar('personal', S.user.email, {
@@ -112,6 +118,7 @@ function renderCenso(previa = {}) {
           ...(previa.dispositivo ? { dispositivo: previa.dispositivo, dispositivoModelo: previa.dispositivoModelo, dispositivoDesde: previa.dispositivoDesde }
             : iosEnNavegador() ? {} : { dispositivo: idDispositivo(), dispositivoModelo: modeloDispositivo(navigator.userAgent), dispositivoDesde: Date.now() }),
         });
+        censo = null; pintar();
         toast('Ficha enviada a gerencia');
       } catch (e) { console.error(e); toast('No se pudo guardar. Revisá la conexión y probá de nuevo.', true); throw e; }
     },
