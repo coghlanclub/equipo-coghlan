@@ -137,9 +137,12 @@ function renderPendiente(p) {
   const decl = S.clases.filter(c => (p.clasesDeclaradas || []).includes(c.id));
   app.innerHTML = barra() + `<main>
     <div class="aviso info"><div><b>Tu ficha está en revisión</b><span>Gerencia la tiene que aprobar. Mientras tanto podés corregirla.</span></div></div>
+    ${ayudaInstalar()}
+    <div class="panel" style="gap:14px"><h3>Fichar</h3>
+      <button class="btn grande bloque" disabled>Fichar entrada · escanear QR</button>
+      <p class="sub">Se habilita apenas gerencia apruebe tu ficha. Después tocás acá y escaneás el QR de la PC de recepción al llegar y al irte.</p></div>
     <div class="panel">${htmlFicha(p, [], { extra: `<div style="display:grid;gap:6px"><h4>Clases que declaraste</h4>${htmlAgenda(decl.map(c => ({ ...c, rol: 'clases' })))}</div>` })}
       <button class="btn ghost" id="editar">Corregir mi ficha</button></div>
-    ${ayudaInstalar()}
   </main>`;
   enlazarBarra();
   $('#editar').onclick = () => renderCenso(p);
