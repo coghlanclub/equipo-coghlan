@@ -1,0 +1,70 @@
+<title>Equipo Coghlan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="estilos.css">
+<style>
+  .inicio { max-width: 1040px; margin: 0 auto; padding: 32px 16px 56px; display: grid; gap: 30px; }
+  .inicio h1 { font-size: clamp(2.2rem, 7vw, 4rem); line-height: 1; }
+  .bajada { font-size: 1.05rem; color: var(--muted); max-width: 62ch; margin: 0; }
+  .puertas { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+  .puerta { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; display: grid; gap: 8px; text-decoration: none; align-content: start; }
+  .puerta:hover { border-color: var(--accent); }
+  .puerta h2 { font-size: 1.35rem; }
+  .puerta .flecha { color: var(--accent); font-weight: 800; }
+  .horario { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: .9rem; }
+  .horario b { color: var(--fg); font-family: var(--f-mono); font-weight: 500; }
+  .guion { display: grid; gap: 0; counter-reset: paso; }
+  .paso { display: grid; grid-template-columns: 44px 1fr; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
+  .paso:first-child { border-top: 0; }
+  .paso::before { counter-increment: paso; content: counter(paso); width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font: 800 .95rem var(--f-mono); }
+  .paso div { display: grid; gap: 3px; min-width: 0; }
+  .paso a { color: var(--accent); font-weight: 700; }
+  .roles { display: flex; gap: 8px; flex-wrap: wrap; }
+</style>
+
+<div class="inicio">
+  <div class="cab">
+    <div class="marca">coghlan<b>club</b><small>Equipo · Demo</small></div>
+    <button class="btn sm ghost" id="reiniciar">Reiniciar datos de ejemplo</button>
+  </div>
+
+  <div style="display:grid;gap:14px">
+    <span class="eyebrow">Propuesta para socios</span>
+    <h1>Equipo Coghlan</h1>
+    <p class="bajada">Censo de todo el equipo, grilla de clases con su profe, vacaciones pedidas formalmente, reemplazos que el sistema detecta solo y fichaje de entrada y salida con un QR que cambia cada 30 segundos.</p>
+    <div class="horario"><span>Lunes a viernes <b>07:00–22:00</b></span><span>Sábados <b>09:00–19:00</b></span><span>3 sedes · <b>115</b> clases por semana</span></div>
+    <div class="roles"><span class="rol rol-musculacion">Sala de musculación</span><span class="rol rol-clases">Profesor de clases</span><span class="rol rol-recepcion">Recepción</span><span class="rol rol-limpieza">Limpieza</span></div>
+  </div>
+
+  <div class="puertas">
+    <a class="puerta" href="gerencia.html"><span class="eyebrow">Solo gerencia</span><h2>Panel de gerencia</h2>
+      <p class="sub">Fichas, grilla, calendario de vacaciones, reemplazos y asistencia del mes.</p><span class="flecha">Entrar como gerencia →</span></a>
+    <a class="puerta" href="profesor.html"><span class="eyebrow">Profes y personal</span><h2>App del profe</h2>
+      <p class="sub">Censo, su horario, fichar con QR y pedir vacaciones o avisar una ausencia.</p><span class="flecha">Entrar como profe →</span></a>
+    <a class="puerta" href="tablet.html"><span class="eyebrow">Recepción</span><h2>Tablet con QR</h2>
+      <p class="sub">El código que escanea el personal al llegar y al irse.</p><span class="flecha">Abrir tablet →</span></a>
+  </div>
+
+  <div class="panel">
+    <h2>Guión para presentarlo</h2>
+    <p class="sub">Unos 10 minutos. Las personas son de ejemplo; en la versión real cada uno entra con su cuenta de Google.</p>
+    <div class="guion">
+      <div class="paso"><div><b>Censo del equipo</b><span class="sub">En <a href="gerencia.html">gerencia</a> → pestaña <b>Censo</b>: la lista de todo el personal, quién recibió el link, quién completó y quién falta. Desde ahí se manda el link por WhatsApp.</span></div></div>
+      <div class="paso"><div><b>El profe completa el censo</b><span class="sub">Abrí la <a href="profesor.html">app del profe</a> → Entrar → <b>Profe nuevo (sin ficha)</b>. Marca su rol, qué actividades sabe dar y qué clases de la grilla da hoy.</span></div></div>
+      <div class="paso"><div><b>Gerencia aprueba la ficha</b><span class="sub">Entrá a <a href="gerencia.html">gerencia</a> → pestaña <b>Personal</b> → <b>Aprobar y cargar clases</b>. Sus clases pasan solas a la grilla.</span></div></div>
+      <div class="paso"><div><b>La grilla con su profe</b><span class="sub">Pestaña <b>Grilla de clases</b>: cada clase de Sede, Anexo y Aranceladas con su profe. En rojo las que no tienen; en amarillo los choques de horario. Probá <b>Calendario del mes</b>.</span></div></div>
+      <div class="paso"><div><b>Un profe pide vacaciones</b><span class="sub">En la app del profe entrá como <b>Lucía Fernández</b> → <b>Solicitar vacaciones</b>. Elige fechas y el correo formal a gerencia ya viene escrito.</span></div></div>
+      <div class="paso"><div><b>Gerencia aprueba y el sistema detecta el reemplazo</b><span class="sub">Pestaña <b>Vacaciones y ausencias</b> → <b>Aprobar</b>. Muestra qué tipo de reemplazo hace falta según sus clases y turnos.</span></div></div>
+      <div class="paso"><div><b>Llamar al reemplazo</b><span class="sub">Pestaña <b>Reemplazos</b>: para cada clase o turno propone quién está libre y da esa actividad, con su ficha, teléfono y WhatsApp con el mensaje listo.</span></div></div>
+      <div class="paso"><div><b>Fichar con el QR</b><span class="sub">Abrí la <a href="tablet.html">tablet</a> y tocá <b>simular que un profe escanea</b>. El fichaje aparece al instante y después se ve en <b>Asistencia</b> con horas y llegadas tarde.</span></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.getElementById('reiniciar').onclick = function () {
+    try { localStorage.removeItem('coghlan-personal-demo-v5'); localStorage.removeItem('coghlan-personal-demo-usuario'); } catch (e) {}
+    this.textContent = 'Datos de ejemplo reiniciados';
+  };
+</script>

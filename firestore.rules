@@ -1,0 +1,129 @@
+rules_version = '2';
+// Reglas de seguridad de Coghlan Club · Personal
+// Los correos de gerencia tienen que ser los mismos que en js/config.js.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function logueado() { return request.auth != null && request.auth.token.email_verified == true; }
+    function correo() { return request.auth.token.email.lower(); }
+    function esAdminFijo() { return logueado() && correo() in ['carlosags1996@gmail.com']; }
+    function esAdmin() {
+      return esAdminFijo() || (logueado() && exists(/databases/$(database)/documents/admins/$(correo())));
+    }
+    // Cuenta de la PC de recepción: solo muestra el QR y ficha con PIN a quien no tiene celular.
+    function esRecepcion() {
+      return logueado() && exists(/databases/$(database)/documents/recepcion/$(correo()));
+    }
+    function miFicha() { return get(/databases/$(database)/documents/personal/$(correo())).data; }
+    function esPersonalActivo() {
+      return logueado()
+        && exists(/databases/$(database)/documents/personal/$(correo()))
+        && get(/databases/$(database)/documents/personal/$(correo())).data.estado == 'activo';
+    }
+    // El QR de recepción cambia cada 30 s; un código vale hasta que vence (unos 70 s).
+    function qrValido(t) {
+      let q = get(/databases/$(database)/documents/qr/actual).data;
+      return (t == q.token || t == q.prev) && request.time < q.exp;
+    }
+
+    match /config/{id} {
+      allow read: if logueado();
+      allow write: if esAdmin();
+    }
+
+    match /admins/{email} {
+      allow read: if esAdmin() || (logueado() && email == correo());
+      allow write: if esAdmin();
+    }
+
+    match /recepcion/{email} {
+      allow read: if esAdmin() || (logueado() && email == correo());
+      allow write: if esAdmin();
+    }
+
+    // Fichas del personal (censo). El profe crea la suya como "pendiente" y gerencia la aprueba.
+    // El PIN de quien ficha sin celular lo ven gerencia, la propia persona y la cuenta de recepción.
+    match /personal/{email} {
+      // Recepción solo ve las fichas de quienes fichan sin celular (para la lista del PIN).
+      allow read: if esAdmin() || (logueado() && email == correo())
+        || (esRecepcion() && resource.data.sinCelular == true);
+      allow create: if esAdmin()
+        || (logueado() && email == correo()
+            && request.resource.data.email == correo()
+            && request.resource.data.estado == 'pendiente'
+            // sin consentimiento firmado no se guarda la ficha
+            && request.resource.data.consentimiento.aceptado == true);
+      allow update: if esAdmin()
+        || (logueado() && email == correo()
+            && resource.data.estado == 'pendiente'
+            && request.resource.data.estado == 'pendiente'
+            && request.resource.data.email == correo())
+        || (logueado() && email == correo()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['telefono', 'pedidoDispositivo']))
+        // Vincular el primer celular (solo si no tiene uno; para cambiarlo habilita gerencia)
+        || (logueado() && email == correo()
+            && (!('dispositivo' in resource.data) || resource.data.dispositivo == '')
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dispositivo', 'dispositivoModelo', 'dispositivoDesde']));
+      allow delete: if esAdmin();
+    }
+
+    // Grilla: la ve todo el personal (para el censo), la edita gerencia.
+    match /clases/{id} {
+      allow read: if logueado();
+      allow write: if esAdmin();
+    }
+
+    // Pedidos de vacaciones y ausencias
+    match /ausencias/{id} {
+      allow read: if esAdmin() || (logueado() && resource.data.email == correo());
+      allow create: if esAdmin()
+        || (esPersonalActivo()
+            && request.resource.data.email == correo()
+            && request.resource.data.estado == 'pendiente');
+      allow update: if esAdmin();
+      allow delete: if esAdmin()
+        || (logueado() && resource.data.email == correo() && resource.data.estado == 'pendiente');
+    }
+
+    match /reemplazos/{id} {
+      allow read: if esAdmin()
+        || (logueado() && (resource.data.reemplazo == correo() || resource.data.titular == correo()));
+      allow write: if esAdmin();
+    }
+
+    // Entradas y salidas: solo con un QR vigente de recepción y con la hora del servidor.
+    match /fichajes/{id} {
+      allow read: if esAdmin() || esRecepcion() || (logueado() && resource.data.email == correo());
+      allow create: if esAdmin()
+        // Recepción: solo fichajes con PIN, de personal activo sin celular, con QR vigente y hora del servidor
+        || (esRecepcion()
+            && request.resource.data.tipo in ['entrada', 'salida']
+            && request.resource.data.ts == request.time
+            && request.resource.data.keys().hasOnly(['email', 'nombre', 'fecha', 'mes', 'tipo', 'ts', 'token', 'metodo', 'dispositivoId', 'dispositivo'])
+            && request.resource.data.metodo == 'pin'
+            && get(/databases/$(database)/documents/personal/$(request.resource.data.email)).data.sinCelular == true
+            && get(/databases/$(database)/documents/personal/$(request.resource.data.email)).data.estado == 'activo'
+            && qrValido(request.resource.data.token))
+        || (esPersonalActivo()
+            && request.resource.data.email == correo()
+            && request.resource.data.tipo in ['entrada', 'salida']
+            && request.resource.data.ts == request.time
+            && request.resource.data.keys().hasOnly(['email', 'nombre', 'fecha', 'mes', 'tipo', 'ts', 'token', 'metodo', 'dispositivoId', 'dispositivo'])
+            && request.resource.data.metodo == 'qr'
+            // solo desde el celular habilitado por gerencia
+            && request.resource.data.dispositivoId == miFicha().dispositivo
+            && qrValido(request.resource.data.token));
+      allow update, delete: if esAdmin();
+    }
+
+    // Lista del censo (solo gerencia)
+    match /censo/{id} {
+      allow read, write: if esAdmin();
+    }
+
+    // Código vigente del QR: lo escribe la PC de recepción. El personal no lo puede leer.
+    match /qr/{id} {
+      allow read, write: if esAdmin() || esRecepcion();
+    }
+  }
+}

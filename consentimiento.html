@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Consentimiento de datos · Coghlan Club</title>
+<link rel="icon" type="image/png" href="img/icono-192.png">
+<style>
+  :root { --tinta: #1b1a1e; --gris: #5d5a64; --linea: #c9c6cf; --rojo: #d6313b; color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #ecebef; color: var(--tinta); font: 13px/1.5 Arial, Helvetica, sans-serif; }
+  .hoja { background: #fff; max-width: 780px; margin: 24px auto; padding: 40px 48px; box-shadow: 0 2px 16px rgba(0,0,0,.12); }
+  .marca { font-weight: 700; font-size: 18px; letter-spacing: -.02em; } .marca b { color: var(--rojo); font-weight: 700; }
+  h1 { font-size: 20px; margin: 18px 0 2px; }
+  .sub { color: var(--gris); margin: 0 0 14px; }
+  .consentimiento > div { margin: 0 0 9px; } .consentimiento h3, .consentimiento > .sub:first-of-type { display: none; }
+  .consentimiento p { margin: 1px 0 0; }
+  .leyenda { font-size: 10.5px; color: var(--gris); margin-top: 10px; }
+  .declaracion { border: 1px solid var(--linea); padding: 10px 12px; margin: 18px 0; }
+  .campos { display: grid; grid-template-columns: 1fr 1fr; gap: 26px 28px; margin-top: 28px; }
+  .campo { border-top: 1px solid var(--tinta); padding-top: 4px; font-size: 11px; color: var(--gris); }
+  .campo b { display: block; color: var(--tinta); font-size: 13px; min-height: 18px; margin-top: -24px; margin-bottom: 6px; }
+  .acciones { max-width: 780px; margin: 16px auto 0; display: flex; gap: 8px; padding: 0 16px; }
+  button { font: 700 14px Arial, sans-serif; padding: 10px 16px; border-radius: 8px; border: 0; background: var(--rojo); color: #fff; cursor: pointer; }
+  @media print { body { background: #fff; } .hoja { box-shadow: none; margin: 0; padding: 0; max-width: none; } .acciones { display: none; } @page { margin: 18mm; } }
+  @media (max-width: 600px) { .hoja { padding: 24px 18px; margin: 12px 8px; } .campos { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="acciones"><button onclick="print()">Imprimir</button></div>
+<div class="hoja">
+  <div class="marca">coghlan<b>club</b></div>
+  <h1 id="titulo"></h1>
+  <p class="sub" id="version"></p>
+  <div id="texto"></div>
+  <div class="declaracion" id="declaracion"></div>
+  <div class="campos">
+    <div class="campo"><b id="nombre"></b>Nombre y apellido</div>
+    <div class="campo"><b></b>DNI</div>
+    <div class="campo"><b></b>Firma</div>
+    <div class="campo"><b></b>Fecha</div>
+  </div>
+</div>
+<script type="module">
+  import { TITULO, VERSION, DECLARACION, LEYENDA, htmlConsentimiento } from './js/consentimiento.js';
+  document.getElementById('titulo').textContent = TITULO;
+  document.getElementById('version').textContent = `Ley 25.326 de Protección de los Datos Personales · versión ${VERSION}`;
+  document.getElementById('texto').innerHTML = htmlConsentimiento(s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])))
+    .replace(/<p class="sub" style="font-size:.78rem">/, '<p class="leyenda">');
+  document.getElementById('declaracion').textContent = DECLARACION;
+  try { document.getElementById('nombre').textContent = decodeURIComponent(location.hash.slice(1)); } catch { /* sin nombre */ }
+</script>
+</body>
+</html>
