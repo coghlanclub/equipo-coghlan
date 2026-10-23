@@ -3,6 +3,15 @@
 // desde el Gmail de gerencia. Si no, se abre la app de correo del celular con el mensaje listo.
 import { DEMO } from './datos.js';
 import { mailto } from './logica.js';
+import { CORREO_GERENCIA, WHATSAPP_RECEPCION } from './config.js';
+
+// A quién le llegan los pedidos: lo de Gerencia → Ajustes, o lo predeterminado de config.js
+export const destinos = (config = {}) => ({
+  correo: config.correoGerencia || CORREO_GERENCIA,
+  cc: config.correoCC || '',
+  waGerencia: config.whatsappGerencia || '',
+  waRecepcion: config.whatsappRecepcion || WHATSAPP_RECEPCION,
+});
 
 export const envioAutomatico = config => !!(config && config.correoScriptUrl);
 

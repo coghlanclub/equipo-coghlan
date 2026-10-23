@@ -9,7 +9,7 @@ import { ayudaInstalar, iosEnNavegador } from './instalar.js';
 import { censoProfe } from './censo-form.js';
 import { htmlConsentimiento } from './consentimiento.js';
 import { flujoFichar, fichajesDeHoy } from './fichaje.js';
-import { enviarCorreo, envioAutomatico } from './correo.js';
+import { enviarCorreo, envioAutomatico, destinos } from './correo.js';
 import { waLink } from './logica.js';
 import { botonGuia, registrarGuia } from './guia.js';
 
@@ -235,7 +235,7 @@ function editarTelefono() {
 }
 
 function avisoCambio(p) {
-  const para = S.config.correoGerencia || '';
+  const para = destinos(S.config).correo;
   const asunto = `Cambio de horario – ${nombreCompleto(p)}`;
   const cuerpo = `Hola, gerencia de Coghlan Club:\n\nLes aviso que cambió mi horario. Desde el __/__/____:\n\n- \n\nSaludos,\n${nombreCompleto(p)}`;
   modal(`${cabModal('Avisar cambio de horario')}<p class="sub">Los horarios los actualiza gerencia. Mandales el detalle por correo.</p>
@@ -248,6 +248,7 @@ function abrirSolicitud(tipo) {
   const manana = iso(sumarDias(new Date(), 1));
   const ini = tipo === 'vacaciones' ? iso(sumarDias(new Date(), 15)) : hoy();
   let editado = false;
+  const dest = destinos(S.config);
   const m = modal(`${cabModal(tipo === 'vacaciones' ? 'Solicitar vacaciones' : 'Avisar ausencia')}
     <p class="sub">Elegí las fechas: el correo formal se arma solo. Al enviar queda registrado en el sistema ${envioAutomatico(S.config) ? 'y el correo le llega a gerencia automáticamente' : 'y se abre tu app de correo con el mensaje listo'}.</p>
     <div class="form">
@@ -257,12 +258,13 @@ function abrirSolicitud(tipo) {
       </div>
       ${tipo === 'ausencia' ? '<label>Motivo<input id="s-motivo" placeholder="Ej.: turno médico, trámite, viaje"></label>' : ''}
       <div id="s-impacto"></div>
-      <div class="correo">
-        <div class="campo"><span>Para</span><input id="s-para" type="email" value="${esc(S.config.correoGerencia || '')}" placeholder="correo de gerencia"></div>
-        <div class="campo"><span>CC</span><input id="s-cc" value="${esc(S.config.correoCC || '')}" placeholder="opcional"></div>
-        <div class="campo"><span>Asunto</span><input id="s-asunto"></div>
-        <textarea id="s-cuerpo" aria-label="Texto del correo"></textarea>
-      </div>
+      <div class="aviso info"><div><b>Se envía solo a</b>
+        <span>Gerencia: <b>${esc(dest.correo)}</b>${dest.waRecepcion ? ' · Recepción por WhatsApp' : ''}</span></div></div>
+      <details><summary style="cursor:pointer;font-weight:600">Ver o editar el mensaje</summary>
+        <div class="correo" style="margin-top:8px">
+          <div class="campo"><span>Asunto</span><input id="s-asunto"></div>
+          <textarea id="s-cuerpo" aria-label="Texto del correo"></textarea>
+        </div></details>
     </div>
     <div class="modal-pie"><button class="btn ghost" data-cerrar>Cancelar</button><button class="btn ghost" id="s-copiar">Copiar texto</button><button class="btn" id="s-enviar">Enviar pedido</button></div>`, { ancho: true });
   const v = id => $(id, m.el)?.value.trim() || '';
@@ -284,12 +286,11 @@ function abrirSolicitud(tipo) {
   $('#s-cuerpo', m.el).addEventListener('input', () => { editado = true; });
   $('#s-asunto', m.el).addEventListener('input', () => { editado = true; });
   regenerar();
-  $('#s-copiar', m.el).onclick = () => copiar(`Para: ${v('#s-para')}\nAsunto: ${v('#s-asunto')}\n\n${$('#s-cuerpo', m.el).value}`, $('#s-cuerpo', m.el));
+  $('#s-copiar', m.el).onclick = () => copiar(`Para: ${dest.correo}\nAsunto: ${v('#s-asunto')}\n\n${$('#s-cuerpo', m.el).value}`, $('#s-cuerpo', m.el));
   $('#s-enviar', m.el).onclick = async () => {
-    const desde = v('#s-desde'), hasta = v('#s-hasta'), para = v('#s-para');
+    const desde = v('#s-desde'), hasta = v('#s-hasta'), para = dest.correo;
     if (!desde || !hasta) return toast('Elegí las fechas', true);
     if (hasta < desde) return toast('La fecha "hasta" tiene que ser igual o posterior a "desde"', true);
-    if (!para) return toast('Falta el correo de gerencia', true);
     if (tipo === 'ausencia' && !v('#s-motivo')) return toast('Escribí el motivo', true);
     const pisa = S.ausencias.find(a => a.estado !== 'rechazada' && a.desde <= hasta && a.hasta >= desde);
     if (pisa) return toast(`Ya tenés un pedido para esas fechas (${rangoTexto(pisa.desde, pisa.hasta)})`, true);
@@ -299,15 +300,17 @@ function abrirSolicitud(tipo) {
     const asunto = v('#s-asunto'), cuerpo = $('#s-cuerpo', m.el).value;
     m.cerrar();
     const urgente = tipo === 'ausencia' && desde <= iso(sumarDias(new Date(), 1));
-    const como = await enviarCorreo(S.config, { para, cc: v('#s-cc'), asunto, cuerpo, responderA: p.email });
-    const wa = S.config.whatsappGerencia ? waLink(S.config.whatsappGerencia, `${asunto}\n\n${cuerpo}`) : '';
+    const como = await enviarCorreo(S.config, { para, cc: dest.cc, asunto, cuerpo, responderA: p.email });
+    const msjWa = `${asunto}\n\n${cuerpo}`;
+    const waRec = dest.waRecepcion ? waLink(dest.waRecepcion, msjWa) : '';
+    const wa = dest.waGerencia ? waLink(dest.waGerencia, msjWa) : '';
     modal(`${cabModal('Pedido registrado')}
       <div class="lista">
         <div class="item"><span>Quedó registrado en el sistema de gerencia</span><span class="pill aprobada">Listo</span></div>
         <div class="item"><span>${como === 'auto' ? `Correo enviado a ${esc(para)}` : 'Se abrió tu app de correo con el mensaje listo: tocá Enviar'}</span><span class="pill ${como === 'auto' ? 'aprobada' : 'pendiente'}">${como === 'auto' ? 'Enviado' : 'Falta Enviar'}</span></div>
       </div>
-      ${wa ? `<div class="aviso ${urgente ? 'mal' : 'info'}"><div><b>${urgente ? 'Es para hoy o mañana: avisá también por WhatsApp' : '¿Querés avisar también por WhatsApp?'}</b>
-        <a class="btn ${urgente ? '' : 'ghost'}" target="_blank" rel="noopener" href="${wa}" style="justify-self:start">Avisar a gerencia por WhatsApp</a></div></div>` : ''}
+      ${waRec || wa ? `<div class="aviso ${urgente ? 'mal' : 'info'}"><div><b>${urgente ? 'Es para hoy o mañana: avisá también por WhatsApp' : 'Avisá también por WhatsApp (el mensaje ya está escrito)'}</b>
+        <div class="acciones">${waRec ? `<a class="btn" target="_blank" rel="noopener" href="${waRec}">Avisar a recepción</a>` : ''}${wa ? `<a class="btn ${waRec ? 'ghost' : ''}" target="_blank" rel="noopener" href="${wa}">Avisar a gerencia</a>` : ''}</div></div></div>` : ''}
       <p class="sub">Cuando gerencia responda, lo vas a ver en "Pedidos a gerencia"${como === 'auto' ? ' y te llega un correo' : ''}.</p>
       <div class="modal-pie"><button class="btn" data-cerrar>Listo</button></div>`);
   };

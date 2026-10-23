@@ -7,7 +7,8 @@ import {
   horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
   faltasSinAviso, sinCorreo, rangoFechas, normTel,
 } from './logica.js';
-import { enviarCorreo, envioAutomatico } from './correo.js';
+import { enviarCorreo, envioAutomatico, destinos } from './correo.js';
+import { CORREO_GERENCIA } from './config.js';
 import { listar } from './datos.js';
 import { $, $$, toast, modal, cabModal, confirmar, copiar, pantallaLogin, prepararDemo, registrarApp, htmlFicha, htmlContacto, chipsRoles, htmlAgenda } from './ui.js';
 import { htmlFormFicha, activarFormFicha } from './ficha-form.js';
@@ -694,7 +695,7 @@ function responder(a, aprobar) {
         ${aprobar && necs.length ? '<button class="btn ok" id="ir-rem">Asignar reemplazos</button>' : ''}</div>`);
     $('#ir-rem', m2.el)?.addEventListener('click', () => { m2.cerrar(); irA('reemplazos'); });
     $('#r-mail', m2.el)?.addEventListener('click', async e => {
-      const como = await enviarCorreo(S.config, { para: a.email, cc: S.config.correoCC || '', asunto: t.asunto, cuerpo: t.cuerpo, responderA: S.config.correoGerencia || '' });
+      const como = await enviarCorreo(S.config, { para: a.email, cc: S.config.correoCC || '', asunto: t.asunto, cuerpo: t.cuerpo, responderA: destinos(S.config).correo || '' });
       if (como === 'auto') { e.target.textContent = 'Correo enviado ✓'; e.target.disabled = true; toast(`Correo enviado a ${a.email}`); }
     });
   };
@@ -870,9 +871,11 @@ function vAjustes(v) {
   v.innerHTML = `<div class="cab"><div><h1>Ajustes</h1></div></div>
     <div class="grid-2">
       <div class="panel"><h3>A dónde llegan los pedidos</h3>
-        <p class="sub">Los pedidos de vacaciones y ausencias van a este correo. Las ausencias de último momento también se pueden avisar por WhatsApp.</p>
-        <div class="form"><label>Correo de gerencia<input id="aj-g" type="email" value="${esc(c.correoGerencia || '')}" placeholder="gerencia@…"></label>
+        <p class="sub">Los pedidos de vacaciones y ausencias le llegan a este correo. Al pedir, el profe también puede avisar por WhatsApp a recepción y a gerencia con el mensaje ya escrito.</p>
+        <div class="form"><label>Correo de gerencia<input id="aj-g" type="email" value="${esc(c.correoGerencia || '')}" placeholder="${esc(CORREO_GERENCIA)} (predeterminado)"></label>
+          <span class="sub">Si lo dejás vacío se usa ${esc(CORREO_GERENCIA)}.</span>
           <label>Con copia a (opcional, separados por coma)<input id="aj-cc" value="${esc(c.correoCC || '')}"></label>
+          <label>WhatsApp de recepción<input id="aj-wr" inputmode="tel" value="${esc(c.whatsappRecepcion || '')}" placeholder="11 5555-5555"></label>
           <label>WhatsApp de gerencia<input id="aj-wa" inputmode="tel" value="${esc(c.whatsappGerencia || '')}" placeholder="11 5555-5555"></label>
           <button class="btn" id="aj-ok" style="justify-self:start">Guardar</button></div></div>
 
@@ -903,7 +906,7 @@ function vAjustes(v) {
         <button class="btn ghost" id="aj-backup" style="justify-self:start">Descargar respaldo completo</button></div>
     </div>`;
   $('#aj-ok').onclick = async () => {
-    await guardar('config', 'general', { correoGerencia: $('#aj-g').value.trim(), correoCC: $('#aj-cc').value.trim(), whatsappGerencia: $('#aj-wa').value.trim() }, { merge: true });
+    await guardar('config', 'general', { correoGerencia: $('#aj-g').value.trim(), correoCC: $('#aj-cc').value.trim(), whatsappGerencia: $('#aj-wa').value.trim(), whatsappRecepcion: $('#aj-wr').value.trim() }, { merge: true });
     toast('Guardado');
   };
   $('#aj-auto').onclick = async () => {
@@ -913,7 +916,7 @@ function vAjustes(v) {
     toast(u ? 'Envío automático activado' : 'Envío automático desactivado');
   };
   $('#aj-probar')?.addEventListener('click', async () => {
-    await enviarCorreo(S.config, { para: S.config.correoGerencia || S.user.email, asunto: 'Prueba · Coghlan Club', cuerpo: 'Si te llegó este correo, el envío automático funciona.' });
+    await enviarCorreo(S.config, { para: destinos(S.config).correo, asunto: 'Prueba · Coghlan Club', cuerpo: 'Si te llegó este correo, el envío automático funciona.' });
     toast('Correo de prueba enviado. Revisá la bandeja (y spam).');
   });
   $$('[data-copiar]', v).forEach(b => b.onclick = () => copiar(b.dataset.copiar));

@@ -21,3 +21,8 @@ export const ADMIN_EMAILS = ['carlosags1996@gmail.com'];
 
 // 3) Cada cuántos segundos cambia el QR de la tablet.
 export const QR_SEGUNDOS = 30;
+
+// 4) Adónde llegan los pedidos de vacaciones y ausencias, si en Gerencia → Ajustes no se cargó otro.
+//    WhatsApp de recepción: con código de área, ej. '11 5555-1234' (vacío = no se ofrece).
+export const CORREO_GERENCIA = 'carlosags1996@gmail.com';
+export const WHATSAPP_RECEPCION = '';
