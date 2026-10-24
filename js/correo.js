@@ -16,14 +16,14 @@ export const destinos = (config = {}) => ({
 export const envioAutomatico = config => !!(config && config.correoScriptUrl);
 
 // Devuelve 'auto' (salió solo) o 'manual' (se abrió la app de correo)
-export async function enviarCorreo(config, { para, cc = '', asunto, cuerpo, responderA = '' }) {
+export async function enviarCorreo(config, { para, cc = '', asunto, cuerpo, responderA = '', nombre = '' }) {
   if (envioAutomatico(config)) {
     if (DEMO) return 'auto';
     try {
       await fetch(config.correoScriptUrl, {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ clave: config.correoClave || '', para, cc, asunto, cuerpo, responderA }),
+        body: JSON.stringify({ clave: config.correoClave || '', para, cc, asunto, cuerpo, responderA, nombre }),
       });
       return 'auto';
     } catch (e) { console.error('Envío automático falló', e); }

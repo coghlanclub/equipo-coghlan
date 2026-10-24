@@ -300,7 +300,7 @@ function abrirSolicitud(tipo) {
     const asunto = v('#s-asunto'), cuerpo = $('#s-cuerpo', m.el).value;
     m.cerrar();
     const urgente = tipo === 'ausencia' && desde <= iso(sumarDias(new Date(), 1));
-    const como = await enviarCorreo(S.config, { para, cc: dest.cc, asunto, cuerpo, responderA: p.email });
+    const como = await enviarCorreo(S.config, { para, cc: dest.cc, asunto, cuerpo, responderA: p.email, nombre: nombreCompleto(p) });
     const msjWa = `${asunto}\n\n${cuerpo}`;
     const waRec = dest.waRecepcion ? waLink(dest.waRecepcion, msjWa) : '';
     const wa = dest.waGerencia ? waLink(dest.waGerencia, msjWa) : '';

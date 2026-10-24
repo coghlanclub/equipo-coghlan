@@ -25,7 +25,8 @@ function doPost(e) {
     const d = JSON.parse(e.postData.contents);
     if (d.clave !== CLAVE) return salida('clave incorrecta');
     if (!d.para || !d.asunto || !d.cuerpo) return salida('faltan datos');
-    const opciones = { name: 'Coghlan Club' };
+    // En la bandeja aparece el nombre de quien pide (ej. "Martín Acosta vía Coghlan Club") y Responder le contesta a esa persona
+    const opciones = { name: d.nombre ? d.nombre + ' vía Coghlan Club' : 'Coghlan Club' };
     if (d.cc) opciones.cc = d.cc;
     if (d.responderA) opciones.replyTo = d.responderA;
     GmailApp.sendEmail(d.para, d.asunto, d.cuerpo, opciones);
