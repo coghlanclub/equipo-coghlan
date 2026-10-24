@@ -142,7 +142,8 @@ export function ausenteEn(email, fecha, ausencias) {
 
 // Turnos y clases que deja descubiertos una ausencia. Siempre se busca reemplazo:
 // - cuentan sus clases y turnos, y las clases que declaró en el censo que todavía no tienen profe;
-// - si no tiene nada cargado, se pide un reemplazo por cada día que abre el club (horario a confirmar).
+// - si ese día no tiene nada cargado (o no tiene horario), igual se pide un reemplazo de su área para
+//   ese día, con el horario a confirmar: si pidió el día es porque trabaja.
 export function necesidades(aus, titular, clases) {
   if (!titular) return [];
   const declaradas = clases.filter(c => !c.profesor && (titular.clasesDeclaradas || []).includes(c.id))
@@ -152,11 +153,14 @@ export function necesidades(aus, titular, clases) {
   for (const f of rangoFechas(aus.desde, aus.hasta)) {
     const dia = deIso(f).getDay();
     const base = { fecha: f, dia, titular: titular.email, ausenciaId: aus.id };
-    for (const s of ag) if (s.dia === dia) {
+    const delDia = ag.filter(s => s.dia === dia);
+    for (const s of delDia) {
       out.push({ ...base, desde: s.desde, hasta: s.hasta, rol: s.rol, actividad: s.actividad || '', sede: s.sede || '', claseId: s.claseId || '' });
     }
-    if (!ag.length && HORARIO_CLUB[dia]) {
-      out.push({ ...base, desde: HORARIO_CLUB[dia][0], hasta: HORARIO_CLUB[dia][1], rol: (titular.roles || [])[0] || 'clases', actividad: '', sede: '', claseId: '', generico: true });
+    if (!delDia.length && HORARIO_CLUB[dia]) {
+      // el área: la de sus turnos fijos o, si no tiene, su primer rol
+      const rol = ag[0]?.rol || (titular.roles || [])[0] || 'clases';
+      out.push({ ...base, desde: HORARIO_CLUB[dia][0], hasta: HORARIO_CLUB[dia][1], rol, actividad: '', sede: '', claseId: '', generico: true });
     }
   }
   return out;

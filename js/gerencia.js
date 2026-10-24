@@ -653,8 +653,8 @@ function motivoSinReemplazo(a, p) {
         : 'Cargale sus clases u horario fijo desde su ficha.'}</span>
       <button class="btn sm" data-ficha="${esc(p.email)}" style="justify-self:start">Abrir su ficha</button></div></div>`;
   }
-  const dias = [...new Set(ag.map(x => DIAS_CORTOS[x.dia]))].join(', ');
-  return `<p class="sub">Sus clases y turnos son los ${dias}: ninguno cae en estas fechas, no hace falta reemplazo.</p>`;
+  // Con la regla actual solo queda sin reemplazo si todos los días pedidos el club está cerrado (domingos)
+  return '<p class="sub">El club está cerrado esos días (domingo): no hace falta reemplazo.</p>';
 }
 
 function verAusencia(a) {
@@ -672,7 +672,7 @@ function verAusencia(a) {
         <td>${r ? `<b>${esc(nom(r.reemplazo))}</b>` : '<span class="pill sin">Sin cubrir</span>'}</td></tr>`; }).join('')}
     </tbody></table></div></div>` : ''}
     <div style="display:grid;gap:8px"><h4>Reemplazo que necesita</h4>${necs.length ? htmlTipoReemplazo(necs) : motivoSinReemplazo(a, p)}
-      ${necs.some(n => n.generico) ? '<span class="sub">No tiene clases ni turnos cargados: se pide un reemplazo por día con el horario a confirmar.</span>' : ''}
+      ${necs.some(n => n.generico) ? '<span class="sub">Los días que no figuran en su horario se piden igual, con el horario a confirmar. Revisá su ficha por si le falta cargar ese día.</span>' : ''}
       ${a.estado !== 'rechazada' && necs.length ? `<span class="sub">${sin ? `${sin} de ${necs.length} todavía sin cubrir.` : 'Todo cubierto.'}</span>` : ''}</div>
     <div class="modal-pie"><button class="btn ghost" id="a-borrar" style="margin-right:auto">Eliminar</button>
       ${a.estado !== 'rechazada' ? '<button class="btn ghost" id="a-rech">Rechazar</button>' : ''}
@@ -771,7 +771,7 @@ function vReemplazos(v) {
 
 function htmlNecesidad(n) {
   const nd = esc(JSON.stringify({ fecha: n.fecha, dia: n.dia, desde: n.desde, hasta: n.hasta, rol: n.rol, actividad: n.actividad, sede: n.sede, claseId: n.claseId, titular: n.titular, ausenciaId: n.ausenciaId, ...(n.generico ? { generico: true } : {}) }));
-  const cab = `<div class="nec-cab"><b>${fechaLarga(n.fecha)}</b>${n.generico ? '<span class="pill neutro" title="No tiene clases ni turnos cargados: confirmá el horario con la persona">horario a confirmar</span>' : `<span class="mono">${n.desde}–${n.hasta}</span>`}<span class="rol rol-${n.rol}">${ROL_CORTO[n.rol]}</span><span>${esc(n.rol === 'clases' ? queCubre(n) : ROLES[n.rol])}</span></div>`;
+  const cab = `<div class="nec-cab"><b>${fechaLarga(n.fecha)}</b>${n.generico ? '<span class="pill neutro" title="Ese día no figura en su horario: confirmá el horario con la persona">horario a confirmar</span>' : `<span class="mono">${n.desde}–${n.hasta}</span>`}<span class="rol rol-${n.rol}">${ROL_CORTO[n.rol]}</span><span>${esc(n.rol === 'clases' ? queCubre(n) : ROLES[n.rol])}</span></div>`;
   if (n.r) {
     const q = P(n.r.reemplazo);
     return `<div class="nec">${cab}<div class="acciones"><span class="pill cubierto">Cubre ${esc(nom(n.r.reemplazo))}</span>
