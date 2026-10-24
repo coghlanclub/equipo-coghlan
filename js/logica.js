@@ -140,15 +140,23 @@ export function ausenteEn(email, fecha, ausencias) {
   return ausencias.some(a => a.email === email && a.estado === 'aprobada' && a.desde <= fecha && a.hasta >= fecha);
 }
 
-// Turnos y clases que deja descubiertos una ausencia.
+// Turnos y clases que deja descubiertos una ausencia. Siempre se busca reemplazo:
+// - cuentan sus clases y turnos, y las clases que declaró en el censo que todavía no tienen profe;
+// - si no tiene nada cargado, se pide un reemplazo por cada día que abre el club (horario a confirmar).
 export function necesidades(aus, titular, clases) {
   if (!titular) return [];
-  const ag = agenda(titular, clases);
+  const declaradas = clases.filter(c => !c.profesor && (titular.clasesDeclaradas || []).includes(c.id))
+    .map(c => ({ dia: c.dia, desde: c.desde, hasta: c.hasta, rol: 'clases', actividad: c.actividad, sede: c.sede, claseId: c.id }));
+  const ag = [...agenda(titular, clases), ...declaradas];
   const out = [];
   for (const f of rangoFechas(aus.desde, aus.hasta)) {
     const dia = deIso(f).getDay();
+    const base = { fecha: f, dia, titular: titular.email, ausenciaId: aus.id };
     for (const s of ag) if (s.dia === dia) {
-      out.push({ fecha: f, dia, desde: s.desde, hasta: s.hasta, rol: s.rol, actividad: s.actividad || '', sede: s.sede || '', claseId: s.claseId || '', titular: titular.email, ausenciaId: aus.id });
+      out.push({ ...base, desde: s.desde, hasta: s.hasta, rol: s.rol, actividad: s.actividad || '', sede: s.sede || '', claseId: s.claseId || '' });
+    }
+    if (!ag.length && HORARIO_CLUB[dia]) {
+      out.push({ ...base, desde: HORARIO_CLUB[dia][0], hasta: HORARIO_CLUB[dia][1], rol: (titular.roles || [])[0] || 'clases', actividad: '', sede: '', claseId: '', generico: true });
     }
   }
   return out;
@@ -177,8 +185,9 @@ export function candidatos(n, personal, ausencias, reemplazos, clases) {
     .filter(p => (p.roles || []).includes(n.rol))
     .filter(p => n.rol !== 'clases' || !n.actividad || (p.actividades || []).includes(n.actividad))
     .filter(p => !ausenteEn(p.email, n.fecha, ausencias))
-    .filter(p => !agenda(p, clases).some(s => s.dia === n.dia && seSolapan(s.desde, s.hasta, n.desde, n.hasta)))
-    .filter(p => !reemplazos.some(r => r.reemplazo === p.email && r.fecha === n.fecha && seSolapan(r.desde, r.hasta, n.desde, n.hasta)))
+    // Si el horario es "a confirmar" (no tenía nada cargado) no se descarta a nadie por horario
+    .filter(p => n.generico || !agenda(p, clases).some(s => s.dia === n.dia && seSolapan(s.desde, s.hasta, n.desde, n.hasta)))
+    .filter(p => n.generico || !reemplazos.some(r => r.reemplazo === p.email && r.fecha === n.fecha && seSolapan(r.desde, r.hasta, n.desde, n.hasta)))
     .map(p => ({ p, disponible: (p.disponible || []).includes(franjaDe(n.dia, n.desde)), carga: reemplazos.filter(r => r.reemplazo === p.email && r.fecha.slice(0, 7) === n.fecha.slice(0, 7)).length }))
     .sort((a, b) => (b.disponible - a.disponible) || a.carga - b.carga || nombreCompleto(a.p).localeCompare(nombreCompleto(b.p)));
 }

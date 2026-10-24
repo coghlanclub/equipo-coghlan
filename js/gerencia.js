@@ -67,7 +67,8 @@ const pedidosCelular = () => S.personal.filter(p => p.pedidoDispositivo?.id && p
 const pendientesAus = () => S.ausencias.filter(a => a.estado === 'pendiente');
 function necesidadesFuturas(desde = hoy(), hasta = null) {
   const out = [];
-  for (const a of S.ausencias.filter(x => x.estado === 'aprobada' && x.hasta >= desde)) {
+  // Se busca reemplazo desde que llega el pedido (pendiente o aprobado)
+  for (const a of S.ausencias.filter(x => (x.estado === 'aprobada' || x.estado === 'pendiente') && x.hasta >= desde)) {
     for (const n of necesidades(a, P(a.email), S.clases)) {
       if (n.fecha < desde || (hasta && n.fecha > hasta)) continue;
       out.push({ ...n, r: cubierto(n, S.reemplazos) });
@@ -666,17 +667,17 @@ function verAusencia(a) {
       <span class="pill ${a.estado}" style="margin-left:auto">${ESTADOS[a.estado]}</span></div>
     <p><b class="mono">${rangoTexto(a.desde, a.hasta)}</b> · ${diasEntre(a.desde, a.hasta)} día(s)${a.motivo ? `<br><span class="sub">Motivo: ${esc(a.motivo)}</span>` : ''}${a.nota ? `<br><span class="sub">Nota de gerencia: ${esc(a.nota)}</span>` : ''}</p>
     ${p ? htmlContacto(p) : ''}
-    ${a.estado === 'aprobada' && necs.length ? `<div style="display:grid;gap:8px"><h4>Quién cubre</h4><div class="tabla-wrap"><table><thead><tr><th>Día</th><th>Horario</th><th>Qué</th><th>Cubre</th></tr></thead><tbody>
+    ${a.estado !== 'rechazada' && necs.length ? `<div style="display:grid;gap:8px"><h4>Quién cubre</h4><div class="tabla-wrap"><table><thead><tr><th>Día</th><th>Horario</th><th>Qué</th><th>Cubre</th></tr></thead><tbody>
       ${necs.map(n => { const r = cubierto(n, S.reemplazos); return `<tr><td>${fechaCorta(n.fecha).slice(0, 5)} ${DIAS_CORTOS[n.dia]}</td><td class="mono">${n.desde}–${n.hasta}</td><td>${esc(n.rol === 'clases' ? queCubre(n) : ROL_CORTO[n.rol])}</td>
         <td>${r ? `<b>${esc(nom(r.reemplazo))}</b>` : '<span class="pill sin">Sin cubrir</span>'}</td></tr>`; }).join('')}
     </tbody></table></div></div>` : ''}
     <div style="display:grid;gap:8px"><h4>Reemplazo que necesita</h4>${necs.length ? htmlTipoReemplazo(necs) : motivoSinReemplazo(a, p)}
-      ${a.estado === 'pendiente' && necs.length ? '<span class="sub">Al aprobar, estos turnos y clases pasan a <b>Reemplazos</b> para asignar quién cubre.</span>' : ''}
-      ${a.estado === 'aprobada' && necs.length ? `<span class="sub">${sin ? `${sin} de ${necs.length} todavía sin cubrir.` : 'Todo cubierto.'}</span>` : ''}</div>
+      ${necs.some(n => n.generico) ? '<span class="sub">No tiene clases ni turnos cargados: se pide un reemplazo por día con el horario a confirmar.</span>' : ''}
+      ${a.estado !== 'rechazada' && necs.length ? `<span class="sub">${sin ? `${sin} de ${necs.length} todavía sin cubrir.` : 'Todo cubierto.'}</span>` : ''}</div>
     <div class="modal-pie"><button class="btn ghost" id="a-borrar" style="margin-right:auto">Eliminar</button>
       ${a.estado !== 'rechazada' ? '<button class="btn ghost" id="a-rech">Rechazar</button>' : ''}
       ${a.estado !== 'aprobada' ? '<button class="btn ok" id="a-apr">Aprobar</button>' : ''}
-      ${a.estado === 'aprobada' && necs.length ? '<button class="btn" id="a-rem">Asignar reemplazos</button>' : ''}</div>`, { ancho: true });
+      ${a.estado !== 'rechazada' && necs.length ? '<button class="btn" id="a-rem">Asignar reemplazos</button>' : ''}</div>`, { ancho: true });
   $$('[data-ficha]', m.el).forEach(b => b.onclick = () => { m.cerrar(); verFicha(P(b.dataset.ficha)); });
   $('#a-apr', m.el)?.addEventListener('click', () => { m.cerrar(); responder(a, true); });
   $('#a-rech', m.el)?.addEventListener('click', () => { m.cerrar(); responder(a, false); });
@@ -738,7 +739,7 @@ function cargarAusencia(email = '') {
 // ============================================================ REEMPLAZOS
 function vReemplazos(v) {
   const h = hoy();
-  const aus = S.ausencias.filter(a => a.estado === 'aprobada' && a.hasta >= h).sort((a, b) => a.desde.localeCompare(b.desde));
+  const aus = S.ausencias.filter(a => (a.estado === 'aprobada' || a.estado === 'pendiente') && a.hasta >= h).sort((a, b) => a.desde.localeCompare(b.desde));
   let bloques = aus.map(a => {
     const necs = necesidades(a, P(a.email), S.clases).filter(n => n.fecha >= h).map(n => ({ ...n, r: cubierto(n, S.reemplazos) }));
     return { a, necs, mostrar: S.soloSinCubrir ? necs.filter(n => !n.r) : necs };
@@ -753,12 +754,12 @@ function vReemplazos(v) {
       const p = P(a.email);
       return `<div class="panel">
         <div class="cab"><div class="persona"><div class="avatar">${esc(iniciales(p || { nombre: a.nombre }))}</div><div><b>${esc(a.nombre || nom(a.email))}</b>
-          <span class="sub">${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'} · <span class="mono">${rangoTexto(a.desde, a.hasta)}</span></span></div></div>
+          <span class="sub">${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'} · <span class="mono">${rangoTexto(a.desde, a.hasta)}</span>${a.estado === 'pendiente' ? ' · <span class="pill pendiente">pendiente de aprobar</span>' : ''}</span></div></div>
           <span class="pill ${necs.some(n => !n.r) ? 'sin' : 'cubierto'}">${necs.filter(n => n.r).length}/${necs.length} cubiertos</span></div>
         <div style="display:grid;gap:6px"><span class="eyebrow">Necesita</span>${htmlTipoReemplazo(necs.filter(n => !n.r).length ? necs.filter(n => !n.r) : necs)}</div>
         <div>${mostrar.length ? mostrar.map(n => htmlNecesidad(n)).join('') : '<p class="vacio">Todo cubierto.</p>'}</div></div>`;
     }).join('') : '<p class="vacio">No hay ausencias aprobadas con turnos por delante.</p>'}
-    ${sinNecesidades.length ? `<div class="panel"><h3>Aprobadas sin reemplazos para pedir</h3>
+    ${sinNecesidades.length ? `<div class="panel"><h3>Pedidos sin reemplazos para buscar</h3>
       ${sinNecesidades.map(a => `<div style="display:grid;gap:6px"><b>${esc(a.nombre || nom(a.email))} · <span class="mono">${rangoTexto(a.desde, a.hasta)}</span></b>${motivoSinReemplazo(a, P(a.email))}</div>`).join('')}</div>` : ''}`;
   $$('[data-f]', v).forEach(b => b.onclick = () => { S.soloSinCubrir = b.dataset.f === '1'; render(); });
   $$('[data-asignar-r]', v).forEach(b => b.onclick = () => asignar(JSON.parse(b.dataset.n), b.dataset.asignarR));
@@ -769,8 +770,8 @@ function vReemplazos(v) {
 }
 
 function htmlNecesidad(n) {
-  const nd = esc(JSON.stringify({ fecha: n.fecha, dia: n.dia, desde: n.desde, hasta: n.hasta, rol: n.rol, actividad: n.actividad, sede: n.sede, claseId: n.claseId, titular: n.titular, ausenciaId: n.ausenciaId }));
-  const cab = `<div class="nec-cab"><b>${fechaLarga(n.fecha)}</b><span class="mono">${n.desde}–${n.hasta}</span><span class="rol rol-${n.rol}">${ROL_CORTO[n.rol]}</span><span>${esc(n.rol === 'clases' ? queCubre(n) : ROLES[n.rol])}</span></div>`;
+  const nd = esc(JSON.stringify({ fecha: n.fecha, dia: n.dia, desde: n.desde, hasta: n.hasta, rol: n.rol, actividad: n.actividad, sede: n.sede, claseId: n.claseId, titular: n.titular, ausenciaId: n.ausenciaId, ...(n.generico ? { generico: true } : {}) }));
+  const cab = `<div class="nec-cab"><b>${fechaLarga(n.fecha)}</b>${n.generico ? '<span class="pill neutro" title="No tiene clases ni turnos cargados: confirmá el horario con la persona">horario a confirmar</span>' : `<span class="mono">${n.desde}–${n.hasta}</span>`}<span class="rol rol-${n.rol}">${ROL_CORTO[n.rol]}</span><span>${esc(n.rol === 'clases' ? queCubre(n) : ROLES[n.rol])}</span></div>`;
   if (n.r) {
     const q = P(n.r.reemplazo);
     return `<div class="nec">${cab}<div class="acciones"><span class="pill cubierto">Cubre ${esc(nom(n.r.reemplazo))}</span>
