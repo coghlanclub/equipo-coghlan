@@ -13,17 +13,21 @@ export const destinos = (config = {}) => ({
   waRecepcion: config.whatsappRecepcion || WHATSAPP_RECEPCION,
 });
 
-export const envioAutomatico = config => !!(config && config.correoScriptUrl);
+// La URL y la clave del script se cargan en Gerencia → Ajustes (no van en el código, que es público)
+const scriptUrl = config => config?.correoScriptUrl || '';
+export const envioAutomatico = config => !!scriptUrl(config);
+// El script solo manda al correo del gym; a cualquier otro destino se abre la app de correo
+const automaticoA = (config, para) => envioAutomatico(config) && String(para).toLowerCase() === destinos(config).correo.toLowerCase();
 
 // Devuelve 'auto' (salió solo) o 'manual' (se abrió la app de correo)
 export async function enviarCorreo(config, { para, cc = '', asunto, cuerpo, responderA = '', nombre = '' }) {
-  if (envioAutomatico(config)) {
+  if (automaticoA(config, para)) {
     if (DEMO) return 'auto';
     try {
-      await fetch(config.correoScriptUrl, {
+      await fetch(scriptUrl(config), {
         method: 'POST', mode: 'no-cors',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ clave: config.correoClave || '', para, cc, asunto, cuerpo, responderA, nombre }),
+        body: JSON.stringify({ clave: config.correoClave || '', para, asunto, cuerpo, responderA, nombre }),
       });
       return 'auto';
     } catch (e) { console.error('Envío automático falló', e); }

@@ -691,7 +691,7 @@ function responder(a, aprobar) {
       <div class="correo"><div class="campo"><span>Para</span><input readonly value="${esc(a.email)}"></div><div class="campo"><span>Asunto</span><input readonly value="${esc(t.asunto)}"></div><textarea readonly rows="7">${esc(t.cuerpo)}</textarea></div>
       <div class="modal-pie"><button class="btn ghost" data-cerrar>Cerrar</button>
         ${P(a.email)?.telefono ? `<a class="btn ghost" target="_blank" rel="noopener" href="${waLink(P(a.email).telefono, t.cuerpo)}">WhatsApp</a>` : ''}
-        ${sinCorreo(P(a.email)) ? '' : `<button class="btn" id="r-mail">${envioAutomatico(S.config) ? 'Enviar correo' : 'Abrir correo'}</button>`}
+        ${sinCorreo(P(a.email)) ? '' : `<button class="btn" id="r-mail">Abrir correo</button>`}
         ${aprobar && necs.length ? '<button class="btn ok" id="ir-rem">Asignar reemplazos</button>' : ''}</div>`);
     $('#ir-rem', m2.el)?.addEventListener('click', () => { m2.cerrar(); irA('reemplazos'); });
     $('#r-mail', m2.el)?.addEventListener('click', async e => {
@@ -873,7 +873,7 @@ function vAjustes(v) {
       <div class="panel"><h3>A dónde llegan los pedidos</h3>
         <p class="sub">Los pedidos de vacaciones y ausencias le llegan a este correo. Al pedir, el profe también puede avisar por WhatsApp a recepción y a gerencia con el mensaje ya escrito.</p>
         <div class="form"><label>Correo de gerencia<input id="aj-g" type="email" value="${esc(c.correoGerencia || '')}" placeholder="${esc(CORREO_GERENCIA)} (predeterminado)"></label>
-          <span class="sub">Si lo dejás vacío se usa ${esc(CORREO_GERENCIA)}.</span>
+          <span class="sub">Si lo dejás vacío se usa ${esc(CORREO_GERENCIA)}. Si lo cambiás, también hay que agregarlo en el script "Correos Coghlan" (lista DESTINOS), porque el script solo manda a los correos de esa lista.</span>
           <label>Con copia a (opcional, separados por coma)<input id="aj-cc" value="${esc(c.correoCC || '')}"></label>
           <label>WhatsApp de recepción<input id="aj-wr" inputmode="tel" value="${esc(c.whatsappRecepcion || '')}" placeholder="11 5555-5555"></label>
           <label>WhatsApp de gerencia<input id="aj-wa" inputmode="tel" value="${esc(c.whatsappGerencia || '')}" placeholder="11 5555-5555"></label>
