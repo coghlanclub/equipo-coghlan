@@ -640,6 +640,22 @@ function htmlTipoReemplazo(necs) {
   return `<div class="resumen-tipo">${ks.map(k => `<div class="bloque-tipo"><b>${k}</b><span>${Object.entries(t[k]).map(([s, n]) => s === 'turnos' ? `${n} turno${n > 1 ? 's' : ''}` : `${esc(s)} ×${n}`).join(' · ')}</span></div>`).join('')}</div>`;
 }
 
+// Por qué una ausencia no genera reemplazos: sin ficha, sin clases/turnos a su nombre, o no caen en esas fechas
+function motivoSinReemplazo(a, p) {
+  if (!p) return `<div class="aviso"><div><b>No encontramos la ficha de ${esc(a.nombre || a.email)} en Personal</b><span>Sin ficha el sistema no sabe qué clases o turnos tiene.</span></div></div>`;
+  const ag = agenda(p, S.clases);
+  if (!ag.length) {
+    const decl = S.clases.filter(c => (p.clasesDeclaradas || []).includes(c.id));
+    return `<div class="aviso"><div><b>${esc(p.nombre)} no tiene clases ni turnos cargados a su nombre</b>
+      <span>Por eso el sistema no sabe qué hay que cubrir. ${decl.length
+        ? `Declaró ${decl.length} clase(s) en el censo, pero en la grilla figuran ${decl.some(c => c.profesor) ? 'a nombre de otro profe' : 'sin profesor'}: asignáselas en <b>Grilla de clases</b>.`
+        : 'Cargale sus clases u horario fijo desde su ficha.'}</span>
+      <button class="btn sm" data-ficha="${esc(p.email)}" style="justify-self:start">Abrir su ficha</button></div></div>`;
+  }
+  const dias = [...new Set(ag.map(x => DIAS_CORTOS[x.dia]))].join(', ');
+  return `<p class="sub">Sus clases y turnos son los ${dias}: ninguno cae en estas fechas, no hace falta reemplazo.</p>`;
+}
+
 function verAusencia(a) {
   if (!a) return;
   const p = P(a.email);
@@ -654,12 +670,14 @@ function verAusencia(a) {
       ${necs.map(n => { const r = cubierto(n, S.reemplazos); return `<tr><td>${fechaCorta(n.fecha).slice(0, 5)} ${DIAS_CORTOS[n.dia]}</td><td class="mono">${n.desde}–${n.hasta}</td><td>${esc(n.rol === 'clases' ? queCubre(n) : ROL_CORTO[n.rol])}</td>
         <td>${r ? `<b>${esc(nom(r.reemplazo))}</b>` : '<span class="pill sin">Sin cubrir</span>'}</td></tr>`; }).join('')}
     </tbody></table></div></div>` : ''}
-    <div style="display:grid;gap:8px"><h4>Reemplazo que necesita</h4>${htmlTipoReemplazo(necs)}
+    <div style="display:grid;gap:8px"><h4>Reemplazo que necesita</h4>${necs.length ? htmlTipoReemplazo(necs) : motivoSinReemplazo(a, p)}
+      ${a.estado === 'pendiente' && necs.length ? '<span class="sub">Al aprobar, estos turnos y clases pasan a <b>Reemplazos</b> para asignar quién cubre.</span>' : ''}
       ${a.estado === 'aprobada' && necs.length ? `<span class="sub">${sin ? `${sin} de ${necs.length} todavía sin cubrir.` : 'Todo cubierto.'}</span>` : ''}</div>
     <div class="modal-pie"><button class="btn ghost" id="a-borrar" style="margin-right:auto">Eliminar</button>
       ${a.estado !== 'rechazada' ? '<button class="btn ghost" id="a-rech">Rechazar</button>' : ''}
       ${a.estado !== 'aprobada' ? '<button class="btn ok" id="a-apr">Aprobar</button>' : ''}
       ${a.estado === 'aprobada' && necs.length ? '<button class="btn" id="a-rem">Asignar reemplazos</button>' : ''}</div>`, { ancho: true });
+  $$('[data-ficha]', m.el).forEach(b => b.onclick = () => { m.cerrar(); verFicha(P(b.dataset.ficha)); });
   $('#a-apr', m.el)?.addEventListener('click', () => { m.cerrar(); responder(a, true); });
   $('#a-rech', m.el)?.addEventListener('click', () => { m.cerrar(); responder(a, false); });
   $('#a-rem', m.el)?.addEventListener('click', () => { m.cerrar(); S.soloSinCubrir = true; irA('reemplazos'); });
@@ -721,10 +739,12 @@ function cargarAusencia(email = '') {
 function vReemplazos(v) {
   const h = hoy();
   const aus = S.ausencias.filter(a => a.estado === 'aprobada' && a.hasta >= h).sort((a, b) => a.desde.localeCompare(b.desde));
-  const bloques = aus.map(a => {
+  let bloques = aus.map(a => {
     const necs = necesidades(a, P(a.email), S.clases).filter(n => n.fecha >= h).map(n => ({ ...n, r: cubierto(n, S.reemplazos) }));
     return { a, necs, mostrar: S.soloSinCubrir ? necs.filter(n => !n.r) : necs };
-  }).filter(b => b.necs.length);
+  });
+  const sinNecesidades = bloques.filter(b => !b.necs.length).map(b => b.a);
+  bloques = bloques.filter(b => b.necs.length);
   const total = bloques.reduce((t, b) => t + b.necs.filter(n => !n.r).length, 0);
   v.innerHTML = `<div class="cab"><div><span class="eyebrow">Detección automática</span><h1>Reemplazos</h1>
       <p class="sub">${total ? `${total} turnos o clases sin cubrir.` : 'Todo cubierto.'} El sistema propone a quien tiene el mismo rol, da esa actividad, no está de vacaciones y está libre en ese horario.</p></div>
@@ -737,7 +757,9 @@ function vReemplazos(v) {
           <span class="pill ${necs.some(n => !n.r) ? 'sin' : 'cubierto'}">${necs.filter(n => n.r).length}/${necs.length} cubiertos</span></div>
         <div style="display:grid;gap:6px"><span class="eyebrow">Necesita</span>${htmlTipoReemplazo(necs.filter(n => !n.r).length ? necs.filter(n => !n.r) : necs)}</div>
         <div>${mostrar.length ? mostrar.map(n => htmlNecesidad(n)).join('') : '<p class="vacio">Todo cubierto.</p>'}</div></div>`;
-    }).join('') : '<p class="vacio">No hay ausencias aprobadas con turnos por delante.</p>'}`;
+    }).join('') : '<p class="vacio">No hay ausencias aprobadas con turnos por delante.</p>'}
+    ${sinNecesidades.length ? `<div class="panel"><h3>Aprobadas sin reemplazos para pedir</h3>
+      ${sinNecesidades.map(a => `<div style="display:grid;gap:6px"><b>${esc(a.nombre || nom(a.email))} · <span class="mono">${rangoTexto(a.desde, a.hasta)}</span></b>${motivoSinReemplazo(a, P(a.email))}</div>`).join('')}</div>` : ''}`;
   $$('[data-f]', v).forEach(b => b.onclick = () => { S.soloSinCubrir = b.dataset.f === '1'; render(); });
   $$('[data-asignar-r]', v).forEach(b => b.onclick = () => asignar(JSON.parse(b.dataset.n), b.dataset.asignarR));
   $$('[data-quitar-r]', v).forEach(b => b.onclick = async () => { await borrar('reemplazos', b.dataset.quitarR); toast('Reemplazo quitado'); });
