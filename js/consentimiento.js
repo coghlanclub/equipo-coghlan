@@ -5,7 +5,7 @@ export const VERSION = '1 · octubre 2026';
 export const TITULO = 'Consentimiento para el uso de datos personales';
 
 export const PUNTOS = [
-  ['Quién guarda los datos', 'Coghlan Club, con domicilio en Washington 2589, Coghlan, Ciudad de Buenos Aires, es responsable de la base de datos de su personal.'],
+  ['Quién guarda los datos', 'Coghlan Club, con domicilio en Washington 2558, Coghlan, Ciudad de Buenos Aires, es responsable de la base de datos de su personal.'],
   ['Qué datos', 'Nombre y apellido, DNI, celular, contacto de emergencia, dirección, rol, clases y horarios, cuándo puedo cubrir reemplazos, y el registro de mis entradas, salidas, vacaciones y ausencias.'],
   ['Para qué se usan', 'Exclusiva y únicamente para fines laborales: organizar la grilla y los horarios, registrar la asistencia, gestionar vacaciones, ausencias y reemplazos, y contactarme a mí o a mi contacto de emergencia por temas de trabajo o ante una urgencia.'],
   ['Para qué NO se usan', 'No se usan con fines publicitarios ni comerciales, no se venden y no se comparten con terceros, salvo que la ley lo exija.'],
