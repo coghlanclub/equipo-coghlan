@@ -49,17 +49,25 @@ async function fichaConPin() {
 }
 function pedirPin(p) {
   let pin = '';
+  // El PIN se puede tocar en pantalla o escribir con el teclado de la PC
+  const teclado = e => {
+    if (/^[0-9]$/.test(e.key)) { e.preventDefault(); tecla(e.key); }
+    else if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); tecla('⌫'); }
+  };
   const m = modal(`${cabModal(esc(nombreCompleto(p)))}
-    <p class="sub" style="text-align:center">Poné tu PIN de 4 números</p>
+    <p class="sub" style="text-align:center">Poné tu PIN de 4 números (tocando o con el teclado)</p>
     <div id="puntos" style="display:flex;gap:14px;justify-content:center;font:800 2rem var(--f-mono)"></div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:320px;margin:0 auto;width:100%">
       ${[1, 2, 3, 4, 5, 6, 7, 8, 9, '', 0, '⌫'].map(k => k === '' ? '<span></span>' : `<button class="btn ghost" data-k="${k}" style="min-height:64px;font-size:1.6rem">${k}</button>`).join('')}
-    </div>`);
+    </div>`, { alCerrar: () => document.removeEventListener('keydown', teclado) });
+  document.addEventListener('keydown', teclado);
   const pintarPuntos = () => { m.el.querySelector('#puntos').textContent = '●'.repeat(pin.length) + '○'.repeat(4 - pin.length); };
   pintarPuntos();
-  m.el.addEventListener('click', async e => {
-    const b = e.target.closest('[data-k]'); if (!b) return;
-    const k = b.dataset.k;
+  m.el.addEventListener('click', e => {
+    const b = e.target.closest('[data-k]'); if (b) { b.blur(); tecla(b.dataset.k); }
+  });
+  async function tecla(k) {
+    if (pin.length === 4) return; // ya se está registrando
     if (k === '⌫') pin = pin.slice(0, -1); else if (pin.length < 4) pin += k;
     pintarPuntos();
     if (pin.length < 4) return;
@@ -77,7 +85,7 @@ function pedirPin(p) {
         <button class="btn grande" data-cerrar>Listo</button></div>`);
       setTimeout(() => ok.cerrar(), 5000);
     } catch (e) { console.error(e); toast('No se pudo registrar. Probá de nuevo.', true); }
-  });
+  }
 }
 let actualToken = () => '';
 
