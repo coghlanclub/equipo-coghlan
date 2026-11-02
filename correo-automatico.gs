@@ -20,7 +20,7 @@
  */
 const CLAVE = 'CAMBIAR_POR_UNA_CLAVE';
 // Solo puede mandar a estos correos (el del gym). Si cambia el correo del gym, cambialo acá también.
-const DESTINOS = ['correo-del-gym@gmail.com'];
+const DESTINOS = ['gerencia@coghlanclub.com.ar'];
 
 function doPost(e) {
   try {
