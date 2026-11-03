@@ -420,7 +420,7 @@ function vGrilla(v) {
     ${vacia ? '<div class="aviso"><div><b>La grilla está vacía.</b><span>Tocá "Cargar grilla oficial" para traer Sede, Anexo y Clases aranceladas.</span></div></div>' : ''}
     <div id="contenido-grilla"></div>`;
   $$('[data-vista]', v).forEach(b => b.onclick = () => { S.vistaGrilla = b.dataset.vista; render(); });
-  $('#nueva-clase').onclick = () => editarClase({ sede: S.sede, dia: 1, desde: '08:00', hasta: '09:00', actividad: '' });
+  $('#nueva-clase').onclick = () => editarClase({ sede: S.sede === SALA ? SEDES[0] : S.sede, dia: 1, desde: '08:00', hasta: '09:00', actividad: '' });
   $('#cargar-oficial').onclick = async () => {
     const faltan = GRILLA_BASE.filter(c => !S.clases.some(x => x.id === c.id));
     if (!faltan.length) return toast('La grilla ya tiene todas las clases oficiales');
@@ -431,13 +431,42 @@ function vGrilla(v) {
   S.vistaGrilla === 'semana' ? grillaSemana(c) : grillaMes(c);
 }
 
+// Grilla aparte de la sala de musculación: mismo formato que las sedes, con los turnos de sala
+// que cada profe cargó en su ficha (censo). Tocá un nombre para ver su ficha.
+const SALA = 'Musculación';
+function selectorSedes() {
+  const sedes = [...new Set([...SEDES, ...S.clases.map(c => c.sede)]), SALA];
+  return `<div class="seg" role="group" aria-label="Sede">${sedes.map(s => `<button data-sede="${esc(s)}" aria-pressed="${S.sede === s}">${esc(s)}</button>`).join('')}</div>`;
+}
+function grillaSala(v) {
+  const profes = S.personal.filter(p => p.estado !== 'inactivo' && ((p.roles || []).includes('musculacion') || (p.horarios || []).some(s => s.rol === 'musculacion')));
+  const turnos = profes.flatMap(p => (p.horarios || []).filter(s => s.rol === 'musculacion').map(s => ({ ...s, p })));
+  const horas = [...new Set(turnos.map(t => t.desde))].sort();
+  const sinTurno = profes.filter(p => !turnos.some(t => t.p === p));
+  const vacios = DIAS_LABORABLES.map(d => huecos(d, turnos.filter(t => t.dia === d && activo(t.p))));
+  const celda = t => `<div class="celda">
+      <div class="act"><span>Sala · ${t.desde}–${t.hasta}</span></div>
+      <button class="btn sm ghost" data-ficha="${esc(t.p.email)}" style="justify-content:flex-start;font-size:.78rem;min-height:30px">${esc(nombreCompleto(t.p))}</button>
+      ${t.p.estado === 'pendiente' ? '<span class="nota">Ficha por aprobar</span>' : ''}</div>`;
+  v.innerHTML = `<div class="acciones" style="margin-bottom:12px">${selectorSedes()}
+      <span class="leyenda"><span><span class="pill sin">rojo</span> horario del club sin nadie en la sala</span></span></div>
+    <div class="tabla-wrap"><table class="grilla"><thead><tr><th>Hora</th>${DIAS_LABORABLES.map(d => `<th>${DIAS_CORTOS[d]}</th>`).join('')}</tr></thead><tbody>
+    ${horas.map(h => `<tr><td class="hora">${h}</td>${DIAS_LABORABLES.map(d => `<td>${turnos.filter(t => t.desde === h && t.dia === d).map(celda).join('')}</td>`).join('')}</tr>`).join('')
+      || '<tr><td colspan="7"><p class="vacio">Todavía no hay turnos de sala. Aparecen cuando los profes de musculación cargan sus horarios en el censo (o desde Personal → su ficha → Editar).</p></td></tr>'}
+    ${horas.length && vacios.some(h => h.length) ? `<tr><td class="hora" style="font-size:.75rem">Sin<br>nadie</td>${vacios.map(hs => `<td>${hs.map(h => `<div class="celda sin-profe"><div class="act"><span>${h.join('–')}</span></div></div>`).join('')}</td>`).join('')}</tr>` : ''}
+    </tbody></table></div>
+    ${sinTurno.length ? `<div class="aviso" style="margin-top:12px"><div><b>Profes de sala sin horario cargado</b><span>${sinTurno.map(p => esc(nombreCompleto(p))).join(' · ')}</span></div></div>` : ''}`;
+  $$('[data-sede]', v).forEach(b => b.onclick = () => { S.sede = b.dataset.sede; render(); });
+  $$('[data-ficha]', v).forEach(b => b.onclick = () => verFicha(P(b.dataset.ficha)));
+}
+
 function grillaSemana(v) {
+  if (S.sede === SALA) return grillaSala(v);
   const cs = S.clases.filter(c => c.sede === S.sede);
   const horas = [...new Set(cs.map(c => c.desde))].sort();
   const confl = new Set();
   for (const p of activos()) for (const [a, b] of conflictos(p, S.clases)) { if (a.claseId) confl.add(a.claseId); if (b.claseId) confl.add(b.claseId); }
-  const sedes = [...new Set([...SEDES, ...S.clases.map(c => c.sede)])];
-  v.innerHTML = `<div class="acciones" style="margin-bottom:12px"><div class="seg" role="group" aria-label="Sede">${sedes.map(s => `<button data-sede="${esc(s)}" aria-pressed="${S.sede === s}">${esc(s)}</button>`).join('')}</div>
+  v.innerHTML = `<div class="acciones" style="margin-bottom:12px">${selectorSedes()}
       <span class="leyenda"><span><span class="pill sin">borde rojo</span> sin profesor</span><span><span class="pill pendiente">borde amarillo</span> choque de horario</span></span></div>
     <div class="tabla-wrap"><table class="grilla"><thead><tr><th>Hora</th>${DIAS_LABORABLES.map(d => `<th>${DIAS_CORTOS[d]}</th>`).join('')}</tr></thead><tbody>
     ${horas.map(h => `<tr><td class="hora">${h}</td>${DIAS_LABORABLES.map(d => `<td>${cs.filter(c => c.desde === h && c.dia === d).map(c => `
