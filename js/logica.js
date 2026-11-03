@@ -196,8 +196,29 @@ export function tipoReemplazo(necs) {
   return out;
 }
 
+// Un turno se puede cubrir por partes (Franco de 12 a 13, Cris de 13 a 17): cada reemplazo guarda su
+// horario (desde/hasta) y el del turno que cubre (turnoDesde/turnoHasta; los viejos no lo tienen y cubren el turno entero).
+export function reemplazosDe(n, reemplazos) {
+  return reemplazos.filter(r => r.titular === n.titular && r.fecha === n.fecha && (r.actividad || '') === (n.actividad || '')
+    && (r.turnoDesde || r.desde) === n.desde && (r.turnoHasta || r.hasta) === n.hasta).sort((a, b) => a.desde.localeCompare(b.desde));
+}
+// Partes del turno que todavía no cubre nadie: [['11:00', '12:00']]
+export function faltaCubrir(n, reemplazos) {
+  // Un turno "a confirmar" (día sin horario cargado) queda cubierto con que alguien lo tome
+  if (n.generico && reemplazosDe(n, reemplazos).length) return [];
+  let cur = min(n.desde); const fin = min(n.hasta); const out = [];
+  for (const r of reemplazosDe(n, reemplazos)) {
+    const a = Math.max(min(r.desde), min(n.desde)), b = Math.min(min(r.hasta), fin);
+    if (a > cur) out.push([hhmm(cur), hhmm(Math.min(a, fin))]);
+    cur = Math.max(cur, b);
+  }
+  if (cur < fin) out.push([hhmm(cur), hhmm(fin)]);
+  return out;
+}
+// El reemplazo si el turno quedó cubierto entero (por una o varias personas)
 export function cubierto(n, reemplazos) {
-  return reemplazos.find(r => r.titular === n.titular && r.fecha === n.fecha && r.desde === n.desde && r.hasta === n.hasta && (r.actividad || '') === (n.actividad || ''));
+  const rs = reemplazosDe(n, reemplazos);
+  return rs.length && !faltaCubrir(n, reemplazos).length ? rs[0] : undefined;
 }
 
 // Quién puede cubrir: mismo rol (y misma actividad si es clase), presente ese día y libre en ese horario.

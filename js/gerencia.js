@@ -3,7 +3,7 @@ import { DEMO, AHORA, alCambiarUsuario, esAdmin, salir, escuchar, escucharDoc, g
 import {
   esc, ROLES, ROL_CORTO, ROLES_TURNO, DIAS, DIAS_CORTOS, DIAS_LABORABLES, MESES, ESTADOS, SEDES, GRILLA_BASE, ACTIVIDADES_BASE,
   hoy, iso, deIso, mesDe, sumarDias, rangoTexto, diasDeTrabajo, textoDias, fechaLarga, fechaCorta, min, seSolapan, nombreCompleto, iniciales,
-  activo, agenda, necesidades, tipoReemplazo, cubierto, candidatos, huecos, conflictos, ausenteEn, jornadas, resumenAsistencia,
+  activo, agenda, necesidades, tipoReemplazo, cubierto, reemplazosDe, faltaCubrir, candidatos, huecos, conflictos, ausenteEn, jornadas, resumenAsistencia,
   horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
   faltasSinAviso, sinCorreo, rangoFechas, normTel,
 } from './logica.js';
@@ -61,6 +61,10 @@ function suscribirMes() { unMes(); unMes = escuchar('fichajes', [['mes', '==', S
 // ---------- Derivados ----------
 const P = email => S.personal.find(p => p.email === email);
 const nom = email => { const p = P(email); return p ? nombreCompleto(p) : email; };
+// Quien cubre puede no estar en el sistema (reemplazo "externo": solo nombre y teléfono)
+const nomR = r => r.externo ? r.reemplazoNombre : nom(r.reemplazo);
+// "Franco Díaz" o, si lo cubren por partes, "Franco Díaz 12:00–13:00 · Cris 13:00–17:00"
+const nomsTurno = n => { const rs = reemplazosDe(n, S.reemplazos); return rs.map(r => nomR(r) + (rs.length > 1 || r.desde !== n.desde || r.hasta !== n.hasta ? ` ${r.desde}–${r.hasta}` : '')).join(' · '); };
 const activos = () => S.personal.filter(activo);
 const pendientesFicha = () => S.personal.filter(p => p.estado === 'pendiente');
 const pedidosCelular = () => S.personal.filter(p => p.pedidoDispositivo?.id && p.pedidoDispositivo.id !== p.dispositivo);
@@ -117,8 +121,8 @@ function vHoy(v) {
     const ult = ultimo(p.email);
     let est;
     if (ausenteEn(p.email, h, S.ausencias)) {
-      const quien = [...new Set(remHoy.filter(r => r.titular === p.email).map(r => nom(r.reemplazo)))];
-      const faltan = ag.length - remHoy.filter(r => r.titular === p.email).length;
+      const quien = [...new Set(remHoy.filter(r => r.titular === p.email).map(nomR))];
+      const faltan = ag.filter(x => !cubierto({ ...x, titular: p.email, fecha: h, actividad: x.actividad || '' }, remHoy)).length;
       est = `<span class="pill neutro">Ausente</span> ${quien.length ? `<span class="sub">cubre ${esc(quien.join(', '))}</span>` : ''} ${faltan > 0 ? `<span class="pill sin">${faltan} sin cubrir</span>` : ''}`;
     } else if (prim) {
       const t = ini != null ? minutosDelDia(prim.ts) - ini : 0;
@@ -515,7 +519,7 @@ function estadoDelDia(fecha) {
   return cs.map(c => {
     const tit = c.profesor;
     const aus = tit && ausenteEn(tit, fecha, S.ausencias);
-    const r = aus ? S.reemplazos.find(r => r.titular === tit && r.fecha === fecha && r.desde === c.desde && (r.actividad || '') === c.actividad) : null;
+    const r = aus ? cubierto({ titular: tit, fecha, desde: c.desde, hasta: c.hasta, actividad: c.actividad }, S.reemplazos) : null;
     return { c, tit, aus, r, ok: !!tit && (!aus || !!r) };
   });
 }
@@ -561,13 +565,14 @@ function verDia(f) {
   modal(`${cabModal(fechaLarga(f))}
     ${est.length ? `<div class="tabla-wrap"><table><thead><tr><th>Hora</th><th>Clase</th><th>Da la clase</th></tr></thead><tbody>
       ${est.map(x => `<tr><td class="mono">${x.c.desde}</td><td>${esc(x.c.actividad)} <span class="sub">· ${esc(x.c.sede)}</span></td>
-        <td>${!x.tit ? '<span class="pill sin">Sin profesor</span>' : x.aus ? (x.r ? `${esc(nom(x.r.reemplazo))} <span class="pill info">reemplaza a ${esc(nom(x.tit))}</span>` : `<span class="pill sin">${esc(nom(x.tit))} ausente · sin cubrir</span>`) : esc(nom(x.tit))}</td></tr>`).join('')}
+        <td>${!x.tit ? '<span class="pill sin">Sin profesor</span>' : x.aus ? (x.r ? `${esc(nomsTurno({ titular: x.tit, fecha: f, desde: x.c.desde, hasta: x.c.hasta, actividad: x.c.actividad }))} <span class="pill info">reemplaza a ${esc(nom(x.tit))}</span>` : `<span class="pill sin">${esc(nom(x.tit))} ausente · sin cubrir</span>`) : esc(nom(x.tit))}</td></tr>`).join('')}
     </tbody></table></div>` : '<p class="vacio">No hay clases este día.</p>'}
     ${turnos.length ? `<h4>Turnos fijos</h4><div class="lista">${turnos.sort((a, b) => a.desde.localeCompare(b.desde)).map(t => {
       const aus = ausenteEn(t.p.email, f, S.ausencias);
-      const r = aus && S.reemplazos.find(r => r.titular === t.p.email && r.fecha === f && r.desde === t.desde);
+      const n = { titular: t.p.email, fecha: f, desde: t.desde, hasta: t.hasta, actividad: '' };
+      const falta = aus ? faltaCubrir(n, S.reemplazos) : [];
       return `<div class="item"><span><span class="rol rol-${t.rol}">${ROL_CORTO[t.rol]}</span> <span class="mono">${t.desde}–${t.hasta}</span> ${esc(nombreCompleto(t.p))}</span>
-        ${aus ? (r ? `<span class="pill info">cubre ${esc(nom(r.reemplazo))}</span>` : '<span class="pill sin">ausente · sin cubrir</span>') : ''}</div>`;
+        ${aus ? `${reemplazosDe(n, S.reemplazos).length ? `<span class="pill info">cubre ${esc(nomsTurno(n))}</span>` : ''} ${falta.length ? `<span class="pill sin">sin cubrir ${falta.map(x => x.join('–')).join(', ')}</span>` : ''}` : ''}</div>`;
     }).join('')}</div>` : ''}
     <div class="modal-pie"><button class="btn ghost" data-cerrar>Cerrar</button></div>`, { ancho: true });
 }
@@ -628,11 +633,11 @@ function quienCubre(a, fecha = null) {
   const rs = S.reemplazos.filter(r => r.ausenciaId === a.id && (!fecha || r.fecha === fecha));
   const por = {};
   for (const r of rs) {
-    const k = r.reemplazo; por[k] = por[k] || {};
+    const k = r.reemplazo; por[k] = por[k] || { nombre: nomR(r), qs: {} };
     const q = r.rol === 'clases' ? r.actividad : ROL_CORTO[r.rol];
-    por[k][q] = (por[k][q] || 0) + 1;
+    por[k].qs[q] = (por[k].qs[q] || 0) + 1;
   }
-  return Object.entries(por).map(([e, qs]) => ({ email: e, nombre: nom(e), detalle: Object.entries(qs).map(([q, n]) => `${q} ×${n}`).join(', ') }));
+  return Object.entries(por).map(([e, x]) => ({ email: e, nombre: x.nombre, detalle: Object.entries(x.qs).map(([q, n]) => `${q} ×${n}`).join(', ') }));
 }
 function htmlCubren(a) {
   const qc = quienCubre(a);
@@ -698,7 +703,7 @@ function verAusencia(a) {
     ${p ? htmlContacto(p) : ''}
     ${a.estado !== 'rechazada' && necs.length ? `<div style="display:grid;gap:8px"><h4>Quién cubre</h4><div class="tabla-wrap"><table><thead><tr><th>Día</th><th>Horario</th><th>Qué</th><th>Cubre</th></tr></thead><tbody>
       ${necs.map(n => { const r = cubierto(n, S.reemplazos); return `<tr><td>${fechaCorta(n.fecha).slice(0, 5)} ${DIAS_CORTOS[n.dia]}</td><td class="mono">${n.desde}–${n.hasta}</td><td>${esc(n.rol === 'clases' ? queCubre(n) : ROL_CORTO[n.rol])}</td>
-        <td>${r ? `<b>${esc(nom(r.reemplazo))}</b>` : '<span class="pill sin">Sin cubrir</span>'}</td></tr>`; }).join('')}
+        <td>${r ? `<b>${esc(nomsTurno(n))}</b>` : `${reemplazosDe(n, S.reemplazos).length ? `<b>${esc(nomsTurno(n))}</b> ` : ''}<span class="pill sin">${reemplazosDe(n, S.reemplazos).length ? 'Falta ' + faltaCubrir(n, S.reemplazos).map(x => x.join('–')).join(', ') : 'Sin cubrir'}</span>`}</td></tr>`; }).join('')}
     </tbody></table></div></div>` : ''}
     <div style="display:grid;gap:8px"><h4>Reemplazo que necesita</h4>${necs.length ? htmlTipoReemplazo(necs) : motivoSinReemplazo(a, p)}
       ${necs.some(n => n.generico) ? '<span class="sub">Los días que no figuran en su horario se piden igual, con el horario a confirmar. Revisá su ficha por si le falta cargar ese día.</span>' : ''}
@@ -801,14 +806,21 @@ function vReemplazos(v) {
 function htmlNecesidad(n) {
   const nd = esc(JSON.stringify({ fecha: n.fecha, dia: n.dia, desde: n.desde, hasta: n.hasta, rol: n.rol, actividad: n.actividad, sede: n.sede, claseId: n.claseId, titular: n.titular, ausenciaId: n.ausenciaId, ...(n.generico ? { generico: true } : {}) }));
   const cab = `<div class="nec-cab"><b>${fechaLarga(n.fecha)}</b>${n.generico ? '<span class="pill neutro" title="Ese día no figura en su horario: confirmá el horario con la persona">horario a confirmar</span>' : `<span class="mono">${n.desde}–${n.hasta}</span>`}<span class="rol rol-${n.rol}">${ROL_CORTO[n.rol]}</span><span>${esc(n.rol === 'clases' ? queCubre(n) : ROLES[n.rol])}</span></div>`;
-  if (n.r) {
-    const q = P(n.r.reemplazo);
-    return `<div class="nec">${cab}<div class="acciones"><span class="pill cubierto">Cubre ${esc(nom(n.r.reemplazo))}</span>
-      ${q?.telefono ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(q.telefono, textoReemplazo(n, q))}">WhatsApp</a>` : ''}
-      <button class="btn sm ghost" data-ficha="${esc(n.r.reemplazo)}">Ficha</button><button class="btn sm ghost" data-quitar-r="${n.r.id}">Quitar</button></div></div>`;
-  }
-  const cs = candidatos(n, S.personal, S.ausencias, S.reemplazos, S.clases);
-  return `<div class="nec">${cab}
+  const rs = reemplazosDe(n, S.reemplazos);
+  const falta = faltaCubrir(n, S.reemplazos);
+  // Quiénes ya cubren (todo el turno o una parte)
+  const partes = rs.map(r => {
+    const q = !r.externo && P(r.reemplazo), tel = q?.telefono || r.reemplazoTel;
+    const parcial = rs.length > 1 || falta.length || r.desde !== n.desde || r.hasta !== n.hasta;
+    return `<div class="acciones"><span class="pill cubierto">${parcial ? `<span class="mono">${r.desde}–${r.hasta}</span> · ` : ''}Cubre ${esc(nomR(r))}${r.externo ? ' (no está en el sistema)' : ''}</span>
+      ${tel ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(tel, textoReemplazo({ ...n, desde: r.desde, hasta: r.hasta }, q || { nombre: r.reemplazoNombre.split(' ')[0] }))}">WhatsApp</a>` : ''}
+      ${q ? `<button class="btn sm ghost" data-ficha="${esc(r.reemplazo)}">Ficha</button>` : ''}<button class="btn sm ghost" data-quitar-r="${r.id}">Quitar</button></div>`;
+  }).join('');
+  if (!falta.length) return `<div class="nec">${cab}${partes}</div>`;
+  // Si ya lo cubren en parte, se buscan libres para lo que falta (no para el turno entero)
+  const cs = candidatos(rs.length ? { ...n, desde: falta[0][0], hasta: falta[0][1] } : n, S.personal, S.ausencias, S.reemplazos, S.clases);
+  return `<div class="nec">${cab}${partes}
+    ${rs.length ? `<span class="pill sin" style="justify-self:start">Falta cubrir <span class="mono">${falta.map(x => x.join('–')).join(', ')}</span></span>` : ''}
     ${cs.length ? `<div class="cands">${cs.map(({ p, carga, disponible }, i) => `<div class="cand" ${i >= 3 ? 'hidden' : ''}>
         <div class="persona"><div class="avatar">${esc(iniciales(p))}</div><div><b>${esc(nombreCompleto(p))}</b><span class="sub mono">${esc(p.telefono || 'sin teléfono')}</span><span class="sub">${esc(p.email)}</span></div></div>
         <span class="sub">${disponible ? '<span class="pill aprobada">Dijo que puede cubrir en ese horario</span> ' : ''}${carga ? `Ya cubre ${carga} este mes` : 'Sin reemplazos este mes'}</span>
@@ -816,17 +828,29 @@ function htmlNecesidad(n) {
           ${p.telefono ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(p.telefono, textoReemplazo(n, p))}">WhatsApp</a>` : ''}
           <a class="btn sm ghost" href="${mailto(p.email, '', `Reemplazo ${fechaCorta(n.fecha)} ${n.desde}`, textoReemplazo(n, p))}">Correo</a>
           <button class="btn sm ghost" data-ficha="${esc(p.email)}">Ficha</button>
-          <button class="btn sm" data-asignar-r="${esc(p.email)}" data-n="${nd}">Asignar</button></div></div>`).join('')}</div>
+          <button class="btn sm" data-asignar-r="${esc(p.email)}" data-n="${nd}">${rs.length ? 'Asignar lo que falta' : 'Asignar'}</button></div></div>`).join('')}</div>
       ${cs.length > 3 ? `<button class="btn sm ghost" data-mas style="justify-self:start">Ver ${cs.length - 3} más</button>` : ''}`
     : `<div class="aviso mal"><div><b>Nadie disponible con ese perfil.</b><span>No hay ${n.rol === 'clases' ? `profes que den ${esc(n.actividad)}` : esc(ROLES[n.rol].toLowerCase())} libres en ese horario.</span></div></div>`}
-    <button class="btn sm ghost" data-manual="${nd}" style="justify-self:start">Elegir otra persona</button></div>`;
+    <button class="btn sm ghost" data-manual="${nd}" style="justify-self:start">Cubrir por partes u otra persona</button></div>`;
 }
+
+// Guarda un reemplazo de una parte del turno (por defecto, el turno entero)
+const docReemplazo = (n, quien, desde = n.desde, hasta = n.hasta) => ({
+  ...n, desde, hasta, turnoDesde: n.desde, turnoHasta: n.hasta, titularNombre: nom(n.titular),
+  ...quien, creado: AHORA, asignadoPor: S.user.email,
+});
 
 async function asignar(n, email) {
   const q = P(email);
-  const doc = { ...n, titularNombre: nom(n.titular), reemplazo: email, reemplazoNombre: nombreCompleto(q), creado: AHORA, asignadoPor: S.user.email };
-  try { await agregar('reemplazos', doc); } catch { return toast('No se pudo asignar', true); }
-  toast(`${nombreCompleto(q)} cubre ${queCubre(n)} el ${fechaCorta(n.fecha)}`);
+  // Cubre lo que falta del turno (si ya lo cubre alguien en parte, solo el resto)
+  const piezas = faltaCubrir(n, S.reemplazos);
+  const parcial = piezas.length !== 1 || piezas[0][0] !== n.desde || piezas[0][1] !== n.hasta;
+  const quien = { reemplazo: email, reemplazoNombre: nombreCompleto(q) };
+  const docs = piezas.map(([d, h]) => docReemplazo(n, quien, d, h));
+  const doc = docs[0];
+  try { await lote(docs.map(data => ({ c: 'reemplazos', id: Math.random().toString(36).slice(2, 14), data }))); } catch { return toast('No se pudo asignar', true); }
+  toast(`${nombreCompleto(q)} cubre ${queCubre(n)} el ${fechaCorta(n.fecha)}${parcial ? ' (' + piezas.map(x => x.join('–')).join(', ') + ')' : ''}`);
+  if (parcial) return;
   // ¿Puede cubrir también las demás iguales de esta ausencia?
   const a = S.ausencias.find(x => x.id === n.ausenciaId);
   if (!a) return;
@@ -834,20 +858,47 @@ async function asignar(n, email) {
     .filter(x => x.fecha >= hoy() && !(x.fecha === n.fecha && x.desde === n.desde) && x.rol === n.rol && (x.actividad || '') === (n.actividad || '') && !cubierto(x, S.reemplazos))
     .filter(x => candidatos(x, S.personal, S.ausencias, [...S.reemplazos, { ...doc }], S.clases).some(c => c.p.email === email));
   if (otras.length && await confirmar(`${esc(q.nombre)} también está libre para las otras <b>${otras.length}</b> ${n.rol === 'clases' ? esc(n.actividad) : 'turnos'} de esta ausencia. ¿Asignarlas también?`, { si: `Asignar ${otras.length} más` })) {
-    await lote(otras.map(x => ({ c: 'reemplazos', id: Math.random().toString(36).slice(2, 14), data: { ...x, titularNombre: nom(x.titular), reemplazo: email, reemplazoNombre: nombreCompleto(q), creado: AHORA, asignadoPor: S.user.email } })));
+    await lote(otras.map(x => ({ c: 'reemplazos', id: Math.random().toString(36).slice(2, 14), data: docReemplazo(x, quien) })));
     toast(`${otras.length + 1} reemplazos asignados a ${q.nombre}`);
   }
 }
 
+// Elegir quién cubre y qué parte del turno: cualquier activo o alguien que no está en el sistema
 function asignarManual(n) {
   const todos = activos().filter(p => p.email !== n.titular && !ausenteEn(p.email, n.fecha, S.ausencias)).sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b)));
-  const m = modal(`${cabModal('Elegir otra persona')}<p class="sub">${fechaLarga(n.fecha)} · <span class="mono">${n.desde}–${n.hasta}</span> · ${esc(queCubre(n))}. Se muestran todos los activos que no están de vacaciones ese día.</p>
-    <label>Persona<select id="m-p">${todos.map(p => {
+  const falta = faltaCubrir(n, S.reemplazos);
+  const [d0, h0] = falta[0] || [n.desde, n.hasta];
+  const m = modal(`${cabModal('Asignar reemplazo')}<p class="sub">${fechaLarga(n.fecha)} · turno <span class="mono">${n.desde}–${n.hasta}</span> · ${esc(queCubre(n))}${falta.length ? ` · falta cubrir <span class="mono">${falta.map(x => x.join('–')).join(', ')}</span>` : ''}</p>
+    <div class="form">
+    <label>Quién cubre<select id="m-p">${todos.map(p => {
       const ocupado = agenda(p, S.clases).some(s => s.dia === n.dia && seSolapan(s.desde, s.hasta, n.desde, n.hasta));
       return `<option value="${esc(p.email)}">${esc(nombreCompleto(p))} · ${(p.roles || []).map(r => ROL_CORTO[r]).join('/')}${ocupado ? ' · ocupado en ese horario' : ''}</option>`;
-    }).join('')}</select></label>
+    }).join('')}<option value="__externo">+ Otra persona (no está en el sistema)</option></select></label>
+    <div class="fila" id="m-ext" hidden><label>Nombre y apellido<input id="m-nombre" placeholder="Ej. Cristian Gómez"></label><label>Teléfono (opcional)<input id="m-tel" inputmode="tel" placeholder="11 5555-1234"></label></div>
+    <div class="fila"><label>Desde<input id="m-desde" type="time" step="900" value="${d0}"></label><label>Hasta<input id="m-hasta" type="time" step="900" value="${h0}"></label></div>
+    <p class="sub">Si lo cubren entre varios, asigná a cada uno su parte. Por ejemplo, Franco de 12:00 a 13:00 y después otra persona de 13:00 a 17:00.</p></div>
     <div class="modal-pie"><button class="btn ghost" data-cerrar>Cancelar</button><button class="btn" id="m-ok">Asignar</button></div>`);
-  $('#m-ok', m.el).onclick = () => { const e = $('#m-p', m.el).value; m.cerrar(); if (e) asignar(n, e); };
+  const sel = $('#m-p', m.el);
+  sel.onchange = () => { $('#m-ext', m.el).hidden = sel.value !== '__externo'; if (sel.value === '__externo') $('#m-nombre', m.el).focus(); };
+  $('#m-ok', m.el).onclick = async () => {
+    const desde = $('#m-desde', m.el).value, hasta = $('#m-hasta', m.el).value;
+    if (!desde || !hasta || min(hasta) <= min(desde)) return toast('Revisá el horario: tiene que terminar después de empezar', true);
+    if (!n.generico && (min(desde) < min(n.desde) || min(hasta) > min(n.hasta))) return toast(`El horario tiene que estar dentro del turno (${n.desde}–${n.hasta})`, true);
+    const choca = reemplazosDe(n, S.reemplazos).find(r => seSolapan(r.desde, r.hasta, desde, hasta));
+    if (choca) return toast(`Esa parte ya la cubre ${nomR(choca)} (${choca.desde}–${choca.hasta})`, true);
+    let quien;
+    if (sel.value === '__externo') {
+      const nombre = $('#m-nombre', m.el).value.trim();
+      if (!nombre) return toast('Escribí el nombre de quien cubre', true);
+      quien = { reemplazo: 'externo:' + nombre.toLowerCase().replace(/\s+/g, '-'), reemplazoNombre: nombre, reemplazoTel: $('#m-tel', m.el).value.trim(), externo: true };
+    } else {
+      if (!sel.value) return;
+      quien = { reemplazo: sel.value, reemplazoNombre: nom(sel.value) };
+    }
+    try { await agregar('reemplazos', docReemplazo(n, quien, desde, hasta)); } catch { return toast('No se pudo asignar', true); }
+    m.cerrar();
+    toast(`${quien.reemplazoNombre} cubre de ${desde} a ${hasta} el ${fechaCorta(n.fecha)}`);
+  };
 }
 
 // ============================================================ ASISTENCIA
