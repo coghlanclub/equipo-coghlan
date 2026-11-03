@@ -1,7 +1,7 @@
 globalThis.__app = 'profe';
 import { DEMO, AHORA, alCambiarUsuario, salir, obtener, escuchar, escucharDoc, guardar, actualizar, agregar, borrar } from './datos.js';
 import {
-  esc, hoy, mesDe, MESES, ESTADOS, rangoTexto, diasEntre, fechaLarga, nombreCompleto, mailto, mailSolicitud, jornadas, agenda,
+  esc, hoy, mesDe, MESES, ESTADOS, rangoTexto, diasEntre, textoDias, fechaLarga, nombreCompleto, mailto, mailSolicitud, jornadas, agenda,
   horaDe, fmtMin, ms, queCubre, TOLERANCIA_TARDE, hhmm, deIso, sumarDias, iso, modeloDispositivo, fechaCorta,
 } from './logica.js';
 import { $, toast, modal, cabModal, confirmar, copiar, pantallaLogin, prepararDemo, registrarApp, htmlFicha, htmlAgenda, idDispositivo } from './ui.js';
@@ -183,7 +183,7 @@ function renderPrincipal(p) {
           <div class="acciones"><button class="btn" id="pedir-vac">Solicitar vacaciones</button><button class="btn ghost" id="pedir-aus">Avisar ausencia</button></div>
           <div class="lista">${misSol.length ? misSol.map(a => `<div class="item"><div>
               <b>${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'} · <span class="mono">${rangoTexto(a.desde, a.hasta)}</span></b>
-              <span class="sub">${diasEntre(a.desde, a.hasta)} día(s)${a.motivo ? ' · ' + esc(a.motivo) : ''}${a.nota ? ' · Gerencia: ' + esc(a.nota) : ''}</span></div>
+              <span class="sub">${textoDias(a.desde, a.hasta, p, S.clases)}${a.motivo ? ' · ' + esc(a.motivo) : ''}${a.nota ? ' · Gerencia: ' + esc(a.nota) : ''}</span></div>
               <div class="acciones"><span class="pill ${a.estado}">${ESTADOS[a.estado]}</span>
               ${a.estado === 'pendiente' ? `<button class="btn sm ghost" data-cancelar="${a.id}">Cancelar</button>` : ''}</div></div>`).join('')
             : '<p class="vacio">No tenés pedidos.</p>'}</div>
@@ -273,14 +273,14 @@ function abrirSolicitud(tipo) {
     if (d && (!h || h < d)) { $('#s-hasta', m.el).value = d; h = d; }
     $('#s-hasta', m.el).min = d || '';
     if (!editado) {
-      const t = mailSolicitud({ tipo, desde: d, hasta: h, motivo: v('#s-motivo'), persona: p });
+      const t = mailSolicitud({ tipo, desde: d, hasta: h, motivo: v('#s-motivo'), persona: p, clases: S.clases });
       $('#s-asunto', m.el).value = t.asunto; $('#s-cuerpo', m.el).value = t.cuerpo;
     }
     const n = d && h ? diasEntre(d, h) : 0;
     const ag = agenda(p, S.clases);
     let turnos = 0;
     if (n && n < 120) for (let x = deIso(d); x <= deIso(h); x.setDate(x.getDate() + 1)) turnos += ag.filter(s => s.dia === x.getDay()).length;
-    $('#s-impacto', m.el).innerHTML = n ? `<p class="sub"><b class="mono">${n}</b> día(s) · ${turnos ? `quedan <b>${turnos}</b> turnos/clases para cubrir; gerencia se encarga del reemplazo.` : 'no tenés turnos esos días.'}</p>` : '';
+    $('#s-impacto', m.el).innerHTML = n ? `<p class="sub"><b>${textoDias(d, h, p, S.clases)}</b> · ${turnos ? `quedan <b>${turnos}</b> turnos/clases para cubrir; gerencia se encarga del reemplazo.` : 'no tenés turnos esos días.'}</p>` : '';
   };
   ['#s-desde', '#s-hasta', '#s-motivo'].forEach(id => $(id, m.el)?.addEventListener('input', regenerar));
   $('#s-cuerpo', m.el).addEventListener('input', () => { editado = true; });

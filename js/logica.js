@@ -134,6 +134,23 @@ export function agenda(p, clases = []) {
   }));
   return [...turnos, ...cls].sort((a, b) => a.dia - b.dia || a.desde.localeCompare(b.desde));
 }
+// Días de la semana en que trabaja: turnos fijos, clases asignadas y clases que declaró en el censo
+export function diasQueTrabaja(p, clases = []) {
+  if (!p) return new Set();
+  const decl = clases.filter(c => (p.clasesDeclaradas || []).includes(c.id));
+  return new Set([...agenda(p, clases), ...decl].map(s => s.dia));
+}
+// Días de trabajo que caen en un pedido (Roberto trabaja mar, jue y vie: del vie 6 al vie 13 son 4, no 8).
+// Sin horario cargado cuentan los días que abre el club.
+export function diasDeTrabajo(desde, hasta, p, clases = []) {
+  const ds = diasQueTrabaja(p, clases);
+  return rangoFechas(desde, hasta).filter(f => { const d = deIso(f).getDay(); return ds.size ? ds.has(d) : !!HORARIO_CLUB[d]; }).length;
+}
+// "4 días de trabajo (8 corridos)"
+export function textoDias(desde, hasta, p, clases = []) {
+  const n = diasDeTrabajo(desde, hasta, p, clases), c = diasEntre(desde, hasta);
+  return `${n} ${n === 1 ? 'día' : 'días'} de trabajo${n !== c ? ` (${c} corridos)` : ''}`;
+}
 export function horasSemanales(p, clases) { return agenda(p, clases).reduce((t, s) => t + (min(s.hasta) - min(s.desde)), 0) / 60; }
 
 export function ausenteEn(email, fecha, ausencias) {
@@ -142,14 +159,15 @@ export function ausenteEn(email, fecha, ausencias) {
 
 // Turnos y clases que deja descubiertos una ausencia. Siempre se busca reemplazo:
 // - cuentan sus clases y turnos, y las clases que declaró en el censo que todavía no tienen profe;
-// - si ese día no tiene nada cargado (o no tiene horario), igual se pide un reemplazo de su área para
-//   ese día, con el horario a confirmar: si pidió el día es porque trabaja.
+// - los días que no trabaja no piden reemplazo; pero si el pedido no toca ninguno de sus días (o no tiene
+//   horario cargado), igual se pide un reemplazo de su área, con el horario a confirmar: si pidió es porque trabaja.
 export function necesidades(aus, titular, clases) {
   if (!titular) return [];
   const declaradas = clases.filter(c => !c.profesor && (titular.clasesDeclaradas || []).includes(c.id))
     .map(c => ({ dia: c.dia, desde: c.desde, hasta: c.hasta, rol: 'clases', actividad: c.actividad, sede: c.sede, claseId: c.id }));
   const ag = [...agenda(titular, clases), ...declaradas];
   const out = [];
+  const trabajaAlguno = rangoFechas(aus.desde, aus.hasta).some(f => ag.some(s => s.dia === deIso(f).getDay()));
   for (const f of rangoFechas(aus.desde, aus.hasta)) {
     const dia = deIso(f).getDay();
     const base = { fecha: f, dia, titular: titular.email, ausenciaId: aus.id };
@@ -157,7 +175,7 @@ export function necesidades(aus, titular, clases) {
     for (const s of delDia) {
       out.push({ ...base, desde: s.desde, hasta: s.hasta, rol: s.rol, actividad: s.actividad || '', sede: s.sede || '', claseId: s.claseId || '' });
     }
-    if (!delDia.length && HORARIO_CLUB[dia]) {
+    if (!delDia.length && !trabajaAlguno && HORARIO_CLUB[dia]) {
       // el área: la de sus turnos fijos o, si no tiene, su primer rol
       const rol = ag[0]?.rol || (titular.roles || [])[0] || 'clases';
       out.push({ ...base, desde: HORARIO_CLUB[dia][0], hasta: HORARIO_CLUB[dia][1], rol, actividad: '', sede: '', claseId: '', generico: true });
@@ -274,15 +292,15 @@ export function mailto(para, cc, asunto, cuerpo) {
   return `mailto:${encodeURIComponent(para || '').replace(/%40/g, '@').replace(/%2C/g, ',')}?${q.join('&')}`;
 }
 
-export function mailSolicitud({ tipo, desde, hasta, motivo, persona }) {
+export function mailSolicitud({ tipo, desde, hasta, motivo, persona, clases = [] }) {
   const nom = nombreCompleto(persona);
   const rol = (persona.roles || []).map(r => ROLES[r]).join(' / ');
   const firma = `\n\nSaludos,\n${nom}${rol ? '\n' + rol : ''}${persona.telefono ? '\nTel: ' + persona.telefono : ''}`;
-  const n = desde && hasta && hasta >= desde ? diasEntre(desde, hasta) : null;
+  const n = desde && hasta && hasta >= desde ? diasDeTrabajo(desde, hasta, persona, clases) : null;
   if (tipo === 'vacaciones') {
     return {
       asunto: `Solicitud de vacaciones – ${nom}`,
-      cuerpo: `Hola, gerencia de Coghlan Club:\n\nPor medio de la presente solicito formalmente mis vacaciones desde el ${fechaCorta(desde)} hasta el ${fechaCorta(hasta)} inclusive${n ? ` (${n} ${n === 1 ? 'día' : 'días'})` : ''}.\n\nQuedo a la espera de la confirmación.${firma}`,
+      cuerpo: `Hola, gerencia de Coghlan Club:\n\nPor medio de la presente solicito formalmente mis vacaciones desde el ${fechaCorta(desde)} hasta el ${fechaCorta(hasta)} inclusive${n ? ` (${n} ${n === 1 ? 'día' : 'días'} de trabajo)` : ''}.\n\nQuedo a la espera de la confirmación.${firma}`,
     };
   }
   const cuando = desde && desde === hasta ? `el día ${fechaCorta(desde)}` : `desde el ${fechaCorta(desde)} hasta el ${fechaCorta(hasta)} inclusive`;

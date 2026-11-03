@@ -2,7 +2,7 @@ globalThis.__app = 'gerencia';
 import { DEMO, AHORA, alCambiarUsuario, esAdmin, salir, escuchar, escucharDoc, guardar, actualizar, agregar, borrar, lote } from './datos.js';
 import {
   esc, ROLES, ROL_CORTO, ROLES_TURNO, DIAS, DIAS_CORTOS, DIAS_LABORABLES, MESES, ESTADOS, SEDES, GRILLA_BASE, ACTIVIDADES_BASE,
-  hoy, iso, deIso, mesDe, sumarDias, rangoTexto, diasEntre, fechaLarga, fechaCorta, min, seSolapan, nombreCompleto, iniciales,
+  hoy, iso, deIso, mesDe, sumarDias, rangoTexto, diasDeTrabajo, textoDias, fechaLarga, fechaCorta, min, seSolapan, nombreCompleto, iniciales,
   activo, agenda, necesidades, tipoReemplazo, cubierto, candidatos, huecos, conflictos, ausenteEn, jornadas, resumenAsistencia,
   horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
   faltasSinAviso, sinCorreo, rangoFechas, normTel,
@@ -346,7 +346,7 @@ function verFicha(p) {
         : `<div class="item" style="border:1px solid var(--line);border-radius:8px;padding:10px"><div><b>Celular vinculado</b><span class="sub">${p.dispositivo ? `${esc(p.dispositivoModelo || 'Celular')}${p.dispositivoDesde ? ' · desde el ' + fechaCorta(iso(new Date(ms(p.dispositivoDesde)))) : ''}` : 'Todavía no entró desde ningún celular'}</span>
           ${p.pedidoDispositivo?.id && p.pedidoDispositivo.id !== p.dispositivo ? `<span class="sub" style="color:var(--warn)">Pidió habilitar un ${esc(p.pedidoDispositivo.modelo || 'celular nuevo')}</span>` : ''}</div>
           ${p.dispositivo ? `<button class="btn sm ghost" id="fi-cel">${p.pedidoDispositivo?.id ? 'Habilitar el celular nuevo' : 'Habilitar otro celular'}</button>` : ''}</div>`}
-      <div style="display:grid;gap:6px"><h4>Vacaciones y ausencias (todas)</h4>${histAus.length ? `<div class="lista">${histAus.map(a => `<div class="item"><span>${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'} · <span class="mono">${rangoTexto(a.desde, a.hasta)}</span> · ${diasEntre(a.desde, a.hasta)} día(s)</span><span class="pill ${a.estado}">${ESTADOS[a.estado]}</span></div>`).join('')}</div>` : '<p class="sub">Ninguna.</p>'}</div>
+      <div style="display:grid;gap:6px"><h4>Vacaciones y ausencias (todas)</h4>${histAus.length ? `<div class="lista">${histAus.map(a => `<div class="item"><span>${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'} · <span class="mono">${rangoTexto(a.desde, a.hasta)}</span> · ${textoDias(a.desde, a.hasta, p, S.clases)}</span><span class="pill ${a.estado}">${ESTADOS[a.estado]}</span></div>`).join('')}</div>` : '<p class="sub">Ninguna.</p>'}</div>
       <p class="sub">${MESES[+S.mesAsis.slice(5) - 1]}: <b class="mono">${js.length}</b> jornadas · <b class="mono">${fmtMin(mins)}</b> · <b class="mono ${faltas.length ? 'tarde' : ''}">${faltas.length}</b> falta(s) sin aviso${faltas.length ? ': ' + faltas.map(f => fechaCorta(f.fecha).slice(0, 5)).join(', ') : ''}</p>` })}
     <div class="modal-pie"><button class="btn ghost" data-cerrar>Cerrar</button><button class="btn ghost" id="fi-aus">Cargar ausencia</button><button class="btn" id="fi-editar">Editar ficha</button></div>`, { ancho: true });
   $('#fi-editar', m.el).onclick = () => { m.cerrar(); editarFicha(p); };
@@ -584,7 +584,7 @@ function vVacaciones(v) {
       const necs = necesidades(a, P(a.email), S.clases);
       const choques = S.ausencias.filter(x => x.id !== a.id && x.estado === 'aprobada' && x.desde <= a.hasta && x.hasta >= a.desde);
       return `<div class="item"><div><b>${esc(a.nombre || nom(a.email))} · ${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'}</b>
-        <span class="sub"><span class="mono">${rangoTexto(a.desde, a.hasta)}</span> · ${diasEntre(a.desde, a.hasta)} día(s) · ${necs.length} turnos/clases a cubrir${a.motivo ? ' · ' + esc(a.motivo) : ''}</span>
+        <span class="sub"><span class="mono">${rangoTexto(a.desde, a.hasta)}</span> · ${textoDias(a.desde, a.hasta, P(a.email), S.clases)} · ${necs.length} turnos/clases a cubrir${a.motivo ? ' · ' + esc(a.motivo) : ''}</span>
         ${choques.length ? `<span class="sub" style="color:var(--warn)">Esos días también falta: ${esc(choques.map(x => x.nombre || nom(x.email)).join(', '))}</span>` : ''}</div>
         <div class="acciones"><button class="btn sm ghost" data-ver-aus="${a.id}">Ver detalle</button><button class="btn sm ok" data-aprobar-aus="${a.id}">Aprobar</button><button class="btn sm ghost" data-rechazar-aus="${a.id}">Rechazar</button></div></div>`;
     }).join('')}</div></div>` : ''}
@@ -647,7 +647,7 @@ function htmlHistorial() {
   const tot = {};
   for (const a of lista.filter(x => x.estado === 'aprobada')) {
     const t = tot[a.email] = tot[a.email] || { nombre: a.nombre || nom(a.email), vac: 0, aus: 0 };
-    t[a.tipo === 'vacaciones' ? 'vac' : 'aus'] += diasEntre(a.desde, a.hasta);
+    t[a.tipo === 'vacaciones' ? 'vac' : 'aus'] += diasDeTrabajo(a.desde, a.hasta, P(a.email), S.clases);
   }
   const personas = [...new Set(S.ausencias.map(a => a.email))].map(e => [e, nom(e)]).sort((a, b) => a[1].localeCompare(b[1]));
   return `<div class="panel"><div class="cab"><h3>Historial</h3><div class="acciones">
@@ -655,9 +655,9 @@ function htmlHistorial() {
       <select id="h-persona" style="width:auto"><option value="">Todo el personal</option>${personas.map(([e, n]) => `<option value="${esc(e)}" ${e === S.histPersona ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div></div>
     ${Object.keys(tot).length ? `<div class="tabla-wrap"><table><thead><tr><th>Persona</th><th class="num">Días de vacaciones ${anio}</th><th class="num">Días de ausencia ${anio}</th></tr></thead><tbody>
       ${Object.values(tot).sort((a, b) => a.nombre.localeCompare(b.nombre)).map(t => `<tr><td>${esc(t.nombre)}</td><td class="num mono">${t.vac}</td><td class="num mono">${t.aus}</td></tr>`).join('')}</tbody></table></div>` : ''}
-    ${lista.length ? `<div class="tabla-wrap"><table><thead><tr><th>Persona</th><th>Tipo</th><th>Fechas</th><th class="num">Días</th><th>Estado</th><th>Quién cubrió</th><th></th></tr></thead><tbody>
+    ${lista.length ? `<div class="tabla-wrap"><table><thead><tr><th>Persona</th><th>Tipo</th><th>Fechas</th><th class="num">Días de trabajo</th><th>Estado</th><th>Quién cubrió</th><th></th></tr></thead><tbody>
       ${lista.map(a => `<tr><td>${esc(a.nombre || nom(a.email))}</td><td>${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'}${a.cargadaPorGerencia ? ' <span class="pill neutro">cargada por gerencia</span>' : ''}</td>
-        <td class="mono">${rangoTexto(a.desde, a.hasta)}</td><td class="num mono">${diasEntre(a.desde, a.hasta)}</td><td><span class="pill ${a.estado}">${ESTADOS[a.estado]}</span></td>
+        <td class="mono">${rangoTexto(a.desde, a.hasta)}</td><td class="num mono">${diasDeTrabajo(a.desde, a.hasta, P(a.email), S.clases)}</td><td><span class="pill ${a.estado}">${ESTADOS[a.estado]}</span></td>
         <td class="sub">${esc(quienCubre(a).map(x => x.nombre).join(', ') || '—')}</td><td><button class="btn sm ghost" data-ver-aus="${a.id}">Ver</button></td></tr>`).join('')}</tbody></table></div>`
       : `<p class="vacio">Sin vacaciones ni ausencias en ${anio}.</p>`}
     <p class="sub">Todo queda guardado: elegí otro año para ver las anteriores. En el calendario de arriba podés ir a meses pasados con ‹.</p></div>`;
@@ -694,7 +694,7 @@ function verAusencia(a) {
   const m = modal(`${cabModal(a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia')}
     <div class="persona"><div class="avatar">${esc(iniciales(p || { nombre: a.nombre }))}</div><div><b>${esc(a.nombre || nom(a.email))}</b><div>${p ? chipsRoles(p) : ''}</div></div>
       <span class="pill ${a.estado}" style="margin-left:auto">${ESTADOS[a.estado]}</span></div>
-    <p><b class="mono">${rangoTexto(a.desde, a.hasta)}</b> · ${diasEntre(a.desde, a.hasta)} día(s)${a.motivo ? `<br><span class="sub">Motivo: ${esc(a.motivo)}</span>` : ''}${a.nota ? `<br><span class="sub">Nota de gerencia: ${esc(a.nota)}</span>` : ''}</p>
+    <p><b class="mono">${rangoTexto(a.desde, a.hasta)}</b> · ${textoDias(a.desde, a.hasta, p, S.clases)}${a.motivo ? `<br><span class="sub">Motivo: ${esc(a.motivo)}</span>` : ''}${a.nota ? `<br><span class="sub">Nota de gerencia: ${esc(a.nota)}</span>` : ''}</p>
     ${p ? htmlContacto(p) : ''}
     ${a.estado !== 'rechazada' && necs.length ? `<div style="display:grid;gap:8px"><h4>Quién cubre</h4><div class="tabla-wrap"><table><thead><tr><th>Día</th><th>Horario</th><th>Qué</th><th>Cubre</th></tr></thead><tbody>
       ${necs.map(n => { const r = cubierto(n, S.reemplazos); return `<tr><td>${fechaCorta(n.fecha).slice(0, 5)} ${DIAS_CORTOS[n.dia]}</td><td class="mono">${n.desde}–${n.hasta}</td><td>${esc(n.rol === 'clases' ? queCubre(n) : ROL_CORTO[n.rol])}</td>
@@ -866,7 +866,7 @@ function vAsistencia(v) {
       <div class="acciones"><label style="flex-direction:row">Mes<input type="month" id="mes" value="${S.mesAsis}" style="width:auto"></label>
         <button class="btn ghost" id="csv">Descargar CSV</button><button class="btn" id="manual">+ Fichaje manual</button></div></div>
     <div class="panel"><h3>Resumen de ${MESES[+S.mesAsis.slice(5) - 1]}</h3>
-      ${res.length ? `<div class="tabla-wrap"><table><thead><tr><th>Persona</th><th class="num">Días</th><th class="num">Horas</th><th class="num">Llegadas tarde</th><th class="num">Faltas sin aviso</th><th class="num">Sin salida</th></tr></thead><tbody>
+      ${res.length ? `<div class="tabla-wrap"><table><thead><tr><th>Persona</th><th class="num">Días de trabajo</th><th class="num">Horas</th><th class="num">Llegadas tarde</th><th class="num">Faltas sin aviso</th><th class="num">Sin salida</th></tr></thead><tbody>
       ${res.map(r => `<tr><td><button class="btn sm ghost" data-filtrar="${esc(r.email)}">${esc(r.nombre)}</button></td><td class="num mono">${r.dias}</td><td class="num mono">${fmtMin(r.minutos)}</td>
         <td class="num mono ${r.tardes ? 'tarde' : ''}">${r.tardes}</td><td class="num mono ${fpp[r.email] ? 'tarde' : ''}">${fpp[r.email] || 0}</td><td class="num mono">${r.sinSalida || ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="vacio">No hay fichajes este mes.</p>'}
       <p class="sub">Tarde = más de ${TOLERANCIA_TARDE} minutos después del primer turno o clase del día. Falta sin aviso = tenía turno o clase, no fichó y no tenía ausencia aprobada.</p></div>
