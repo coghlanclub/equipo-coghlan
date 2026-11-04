@@ -300,3 +300,20 @@ td.num, th.num { text-align: right; }
   .barra .der > .sub { display: none; }
   main { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
 }
+
+/* Grilla de musculación: barras de color de la hora de inicio a la de fin */
+.sala-cal { display: grid; grid-template-columns: 56px repeat(6, minmax(110px, 1fr)); min-width: 760px; border: 1px solid var(--line); border-radius: var(--radio); overflow: hidden; }
+.sala-col { border-left: 1px solid var(--line); }
+.sala-col:first-child { border-left: 0; }
+.sala-cab { background: var(--accent); color: var(--accent-ink); text-align: center; font-weight: 700; font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; padding: 8px 4px; }
+.sala-cuerpo { position: relative; height: var(--alto); }
+.sala-cuerpo > i { position: absolute; left: 0; right: 0; border-top: 1px solid var(--line); }
+.sala-horas .sala-cuerpo { background: var(--surface-2); }
+.sala-horas span { position: absolute; left: 0; right: 0; text-align: center; font: 700 .72rem var(--f-mono); transform: translateY(-50%); }
+.sala-horas span:first-child { transform: none; }
+.sala-cerrado { position: absolute; left: 0; right: 0; background: repeating-linear-gradient(135deg, rgba(127,127,127,.12) 0 4px, transparent 4px 8px); }
+.sala-b { position: absolute; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; overflow: hidden; border: 0; border-radius: 6px; padding: 4px 6px; color: var(--fg); font: inherit; font-size: .72rem; line-height: 1.2; text-align: left; cursor: pointer; }
+.sala-b b { font-size: .8rem; }
+.sala-b span { opacity: .85; font-family: var(--f-mono); font-size: .68rem; }
+.rem-barra { position: relative; height: 26px; border-radius: 6px; background: var(--surface-2); overflow: hidden; margin: 2px 0 4px; }
+.rem-barra > div { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; padding: 0 6px; font-size: .72rem; white-space: nowrap; overflow: hidden; }

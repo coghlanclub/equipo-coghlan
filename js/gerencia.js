@@ -5,7 +5,7 @@ import {
   hoy, iso, deIso, mesDe, sumarDias, rangoTexto, diasDeTrabajo, textoDias, fechaLarga, fechaCorta, min, seSolapan, nombreCompleto, iniciales,
   activo, agenda, necesidades, tipoReemplazo, cubierto, reemplazosDe, faltaCubrir, candidatos, huecos, conflictos, ausenteEn, jornadas, resumenAsistencia,
   horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
-  faltasSinAviso, sinCorreo, rangoFechas, normTel,
+  faltasSinAviso, sinCorreo, rangoFechas, normTel, HORARIO_CLUB, hhmm,
 } from './logica.js';
 import { enviarCorreo, envioAutomatico, destinos } from './correo.js';
 import { CORREO_GERENCIA } from './config.js';
@@ -442,25 +442,65 @@ function selectorSedes() {
   const sedes = [...new Set([...SEDES, ...S.clases.map(c => c.sede)]), SALA];
   return `<div class="seg" role="group" aria-label="Sede">${sedes.map(s => `<button data-sede="${esc(s)}" aria-pressed="${S.sede === s}">${esc(s)}</button>`).join('')}</div>`;
 }
+// Colores fijos por persona (para reconocer a cada uno de un vistazo)
+const colorDe = clave => { let h = 0; for (const c of clave) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const estiloPersona = clave => { const h = colorDe(clave); return `background:hsl(${h} 65% 50% / .3);border-left:4px solid hsl(${h} 70% 60%)`; };
+const lunesDe = d => sumarDias(d, -((d.getDay() + 6) % 7));
 function grillaSala(v) {
   const profes = S.personal.filter(p => p.estado !== 'inactivo' && ((p.roles || []).includes('musculacion') || (p.horarios || []).some(s => s.rol === 'musculacion')));
   const turnos = profes.flatMap(p => (p.horarios || []).filter(s => s.rol === 'musculacion').map(s => ({ ...s, p })));
-  const horas = [...new Set(turnos.map(t => t.desde))].sort();
   const sinTurno = profes.filter(p => !turnos.some(t => t.p === p));
-  const vacios = DIAS_LABORABLES.map(d => huecos(d, turnos.filter(t => t.dia === d && activo(t.p))));
-  const celda = t => `<div class="celda">
-      <div class="act"><span>Sala · ${t.desde}–${t.hasta}</span></div>
-      <button class="btn sm ghost" data-ficha="${esc(t.p.email)}" style="justify-content:flex-start;font-size:.78rem;min-height:30px">${esc(nombreCompleto(t.p))}</button>
-      ${t.p.estado === 'pendiente' ? '<span class="nota">Ficha por aprobar</span>' : ''}</div>`;
+  // Semana tipo (sin fechas) o una semana real, con vacaciones y reemplazos
+  const lunes = S.semanaSala ? deIso(S.semanaSala) : null;
+  const fechaDe = d => lunes ? iso(sumarDias(lunes, d - 1)) : null;
+  const ini = Math.min(...DIAS_LABORABLES.map(d => min(HORARIO_CLUB[d][0]))), fin = Math.max(...DIAS_LABORABLES.map(d => min(HORARIO_CLUB[d][1])));
+  const PX = 46 / 60; // alto de cada minuto
+  const bloquesDe = d => {
+    const f = fechaDe(d), out = [];
+    for (const t of turnos.filter(t => t.dia === d)) {
+      const aus = f && ausenteEn(t.p.email, f, S.ausencias);
+      out.push({ desde: t.desde, hasta: t.hasta, nombre: nombreCompleto(t.p), clave: t.p.email, tipo: aus ? 'ausente' : 'turno', email: t.p.email });
+      if (aus) for (const r of reemplazosDe({ titular: t.p.email, fecha: f, desde: t.desde, hasta: t.hasta, actividad: '' }, S.reemplazos))
+        out.push({ desde: r.desde, hasta: r.hasta, nombre: nomR(r), clave: r.reemplazo, tipo: 'cubre', aQuien: t.p.nombre || nombreCompleto(t.p), email: r.externo ? '' : r.reemplazo });
+    }
+    const presentes = out.filter(b => b.tipo !== 'ausente');
+    for (const [a, b] of huecos(d, presentes)) out.push({ desde: a, hasta: b, nombre: 'Sin nadie', tipo: 'hueco' });
+    // Si dos se superponen, van uno al lado del otro
+    out.sort((x, y) => min(x.desde) - min(y.desde) || min(y.hasta) - min(x.hasta));
+    const carriles = [];
+    for (const b of out) { let i = carriles.findIndex(f => f <= min(b.desde)); if (i < 0) { i = carriles.length; carriles.push(0); } carriles[i] = min(b.hasta); b.carril = i; }
+    out.forEach(b => { b.de = carriles.length; });
+    return out;
+  };
+  const bloque = b => {
+    const top = (min(b.desde) - ini) * PX, alto = Math.max((min(b.hasta) - min(b.desde)) * PX - 2, 16);
+    const estilo = b.tipo === 'hueco' ? 'background:color-mix(in srgb,var(--accent) 22%,transparent);border:1px dashed var(--accent);color:var(--accent)'
+      : b.tipo === 'ausente' ? 'background:repeating-linear-gradient(135deg,rgba(127,127,127,.18) 0 6px,transparent 6px 12px);border:1px dashed var(--muted);color:var(--muted)'
+      : estiloPersona(b.clave);
+    return `<button class="sala-b" ${b.email ? `data-ficha="${esc(b.email)}"` : ''} style="top:${top}px;height:${alto}px;left:calc(${b.carril * 100 / b.de}% + 2px);width:calc(${100 / b.de}% - 4px);${estilo}" title="${esc(`${b.nombre} ${b.desde}–${b.hasta}`)}">
+      <b>${esc(b.tipo === 'hueco' ? b.nombre : b.nombre.split(' ')[0])}</b><span>${b.desde}–${b.hasta}</span>${b.tipo === 'cubre' ? `<span>cubre a ${esc(b.aQuien)}</span>` : b.tipo === 'ausente' ? '<span>ausente</span>' : ''}</button>`;
+  };
+  const horas = []; for (let m = Math.ceil(ini / 60) * 60; m <= fin; m += 60) horas.push(m);
+  const alto = (fin - ini) * PX;
+  const semTxt = lunes ? `Semana del ${fechaCorta(iso(lunes)).slice(0, 5)} al ${fechaCorta(iso(sumarDias(lunes, 5))).slice(0, 5)}` : '';
   v.innerHTML = `<div class="acciones" style="margin-bottom:12px">${selectorSedes()}
-      <span class="leyenda"><span><span class="pill sin">rojo</span> horario del club sin nadie en la sala</span></span></div>
-    <div class="tabla-wrap"><table class="grilla"><thead><tr><th>Hora</th>${DIAS_LABORABLES.map(d => `<th>${DIAS_CORTOS[d]}</th>`).join('')}</tr></thead><tbody>
-    ${horas.map(h => `<tr><td class="hora">${h}</td>${DIAS_LABORABLES.map(d => `<td>${turnos.filter(t => t.desde === h && t.dia === d).map(celda).join('')}</td>`).join('')}</tr>`).join('')
-      || '<tr><td colspan="7"><p class="vacio">Todavía no hay turnos de sala. Aparecen cuando los profes de musculación cargan sus horarios en el censo (o desde Personal → su ficha → Editar).</p></td></tr>'}
-    ${horas.length && vacios.some(h => h.length) ? `<tr><td class="hora" style="font-size:.75rem">Sin<br>nadie</td>${vacios.map(hs => `<td>${hs.map(h => `<div class="celda sin-profe"><div class="act"><span>${h.join('–')}</span></div></div>`).join('')}</td>`).join('')}</tr>` : ''}
-    </tbody></table></div>
+      <div class="seg" role="group" aria-label="Semana"><button data-sem="tipo" aria-pressed="${!lunes}">Semana tipo</button><button data-sem="-1" aria-label="Semana anterior">‹</button><button data-sem="hoy" aria-pressed="${!!lunes}">${lunes ? semTxt : 'Con fechas'}</button><button data-sem="1" aria-label="Semana siguiente">›</button></div>
+      <span class="leyenda"><span><span class="pill neutro">rayado</span> ausente</span><span><span class="pill sin">rojo</span> sin nadie</span></span></div>
+    ${turnos.length ? `<div class="tabla-wrap"><div class="sala-cal" style="--alto:${alto}px">
+      <div class="sala-col sala-horas"><div class="sala-cab">Hora</div><div class="sala-cuerpo">${horas.map(m => `<span style="top:${(m - ini) * PX}px">${hhmm(m)}</span>`).join('')}</div></div>
+      ${DIAS_LABORABLES.map(d => `<div class="sala-col"><div class="sala-cab">${DIAS_CORTOS[d]}${lunes ? ' ' + fechaCorta(fechaDe(d)).slice(0, 5) : ''}</div>
+        <div class="sala-cuerpo">${horas.map(m => `<i style="top:${(m - ini) * PX}px"></i>`).join('')}
+          ${min(HORARIO_CLUB[d][0]) > ini ? `<div class="sala-cerrado" style="top:0;height:${(min(HORARIO_CLUB[d][0]) - ini) * PX}px"></div>` : ''}
+          ${min(HORARIO_CLUB[d][1]) < fin ? `<div class="sala-cerrado" style="top:${(min(HORARIO_CLUB[d][1]) - ini) * PX}px;bottom:0"></div>` : ''}
+          ${bloquesDe(d).map(bloque).join('')}</div></div>`).join('')}
+    </div></div>` : '<p class="vacio">Todavía no hay turnos de sala. Aparecen cuando los profes de musculación cargan sus horarios en el censo (o desde Personal → su ficha → Editar).</p>'}
     ${sinTurno.length ? `<div class="aviso" style="margin-top:12px"><div><b>Profes de sala sin horario cargado</b><span>${sinTurno.map(p => esc(nombreCompleto(p))).join(' · ')}</span></div></div>` : ''}`;
   $$('[data-sede]', v).forEach(b => b.onclick = () => { S.sede = b.dataset.sede; render(); });
+  $$('[data-sem]', v).forEach(b => b.onclick = () => {
+    const k = b.dataset.sem;
+    S.semanaSala = k === 'tipo' ? null : k === 'hoy' ? (S.semanaSala || iso(lunesDe(new Date()))) : iso(sumarDias(lunes || lunesDe(new Date()), +k * 7));
+    render();
+  });
   $$('[data-ficha]', v).forEach(b => b.onclick = () => verFicha(P(b.dataset.ficha)));
 }
 
@@ -816,11 +856,15 @@ function htmlNecesidad(n) {
       ${tel ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(tel, textoReemplazo({ ...n, desde: r.desde, hasta: r.hasta }, q || { nombre: r.reemplazoNombre.split(' ')[0] }))}">WhatsApp</a>` : ''}
       ${q ? `<button class="btn sm ghost" data-ficha="${esc(r.reemplazo)}">Ficha</button>` : ''}<button class="btn sm ghost" data-quitar-r="${r.id}">Quitar</button></div>`;
   }).join('');
-  if (!falta.length) return `<div class="nec">${cab}${partes}</div>`;
+  // Barra del turno: cada parte con el color de quien la cubre, lo que falta en rojo
+  const largo = min(n.hasta) - min(n.desde);
+  const tramo = (d, h, estilo, txt) => `<div style="left:${(min(d) - min(n.desde)) * 100 / largo}%;width:${(min(h) - min(d)) * 100 / largo}%;${estilo}" title="${esc(txt)}">${esc(txt)}</div>`;
+  const barra = n.generico || !largo ? '' : `<div class="rem-barra">${rs.map(r => tramo(r.desde, r.hasta, estiloPersona(r.reemplazo), `${nomR(r).split(' ')[0]} ${r.desde}–${r.hasta}`)).join('')}
+    ${falta.map(([d, h]) => tramo(d, h, 'background:color-mix(in srgb,var(--accent) 22%,transparent);border:1px dashed var(--accent);color:var(--accent)', `Falta ${d}–${h}`)).join('')}</div>`;
+  if (!falta.length) return `<div class="nec">${cab}${barra}${partes}</div>`;
   // Si ya lo cubren en parte, se buscan libres para lo que falta (no para el turno entero)
   const cs = candidatos(rs.length ? { ...n, desde: falta[0][0], hasta: falta[0][1] } : n, S.personal, S.ausencias, S.reemplazos, S.clases);
-  return `<div class="nec">${cab}${partes}
-    ${rs.length ? `<span class="pill sin" style="justify-self:start">Falta cubrir <span class="mono">${falta.map(x => x.join('–')).join(', ')}</span></span>` : ''}
+  return `<div class="nec">${cab}${barra}${partes}
     ${cs.length ? `<div class="cands">${cs.map(({ p, carga, disponible }, i) => `<div class="cand" ${i >= 3 ? 'hidden' : ''}>
         <div class="persona"><div class="avatar">${esc(iniciales(p))}</div><div><b>${esc(nombreCompleto(p))}</b><span class="sub mono">${esc(p.telefono || 'sin teléfono')}</span><span class="sub">${esc(p.email)}</span></div></div>
         <span class="sub">${disponible ? '<span class="pill aprobada">Dijo que puede cubrir en ese horario</span> ' : ''}${carga ? `Ya cubre ${carga} este mes` : 'Sin reemplazos este mes'}</span>
