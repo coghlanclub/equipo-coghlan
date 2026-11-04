@@ -5,7 +5,7 @@ import {
   hoy, iso, deIso, mesDe, sumarDias, rangoTexto, diasDeTrabajo, textoDias, fechaLarga, fechaCorta, min, seSolapan, nombreCompleto, iniciales,
   activo, agenda, necesidades, tipoReemplazo, cubierto, reemplazosDe, faltaCubrir, candidatos, huecos, conflictos, ausenteEn, jornadas, resumenAsistencia,
   horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
-  faltasSinAviso, sinCorreo, rangoFechas, normTel, HORARIO_CLUB, hhmm,
+  faltasSinAviso, sinCorreo, rangoFechas, normTel, HORARIO_CLUB, hhmm, FRANJAS,
 } from './logica.js';
 import { enviarCorreo, envioAutomatico, destinos } from './correo.js';
 import { CORREO_GERENCIA } from './config.js';
@@ -1213,7 +1213,7 @@ registrarGuia({
 // - Preguntas con palabras comunes (escritas o dictadas por voz). Claude contesta corto, lleva a la
 //   pantalla que corresponde y propone acciones. Nada se hace sin que alguien toque el botón y confirme.
 // La app arma un resumen de los datos y se lo manda al script de Google (el mismo de los correos), que le pregunta a Claude.
-const PREGUNTAS = ['¿Qué tengo que hacer hoy?', '¿Qué falta cubrir esta semana?', '¿Quién está libre mañana a la tarde?', '¿Cómo se usa esta pantalla?'];
+const PREGUNTAS = ['¿Qué falta cubrir esta semana?', '¿Quién falta hoy?', '¿Quién está libre mañana a la tarde?', '¿Hay vacaciones para aprobar?', '¿Quién falta completar el censo?', '¿Cómo se usa esta pantalla?'];
 const AS = { abierto: false, chat: [], esperando: false, escuchando: false };
 const NOMBRE_TAB = Object.fromEntries(TABS);
 
@@ -1315,14 +1315,157 @@ function datosAsistente() {
   };
 }
 
+// ---------- Asistente gratis: entiende las preguntas más comunes, sin IA paga y sin mandar datos afuera ----------
+const sinTildes = t => (t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+const FRANJA_MIN = { m: [420, 720], t: [720, 1020], n: [1020, 1320] };
+const AYUDA_TAB = {
+  hoy: 'Acá ves quién vino hoy, quién falta y qué turnos quedan sin cubrir. Arriba están los números del día.',
+  censo: 'Acá ves quién completó la ficha del censo y quién falta. Con "Copiar mensaje" mandás el link por WhatsApp. Las fichas nuevas se aprueban en Personal.',
+  personal: 'Acá están las fichas de todos. Tocá una persona para ver sus datos, horarios y faltas. Con "+ Cargar persona" cargás a alguien a mano, y ahí mismo podés agregar sus clases con horario.',
+  grilla: 'Acá están las clases de cada sede. El botón Musculación muestra la sala con barras de color. "Calendario del mes" muestra cada día: tocá un día para ver quién está y a qué hora.',
+  vacaciones: 'Acá llegan los pedidos de vacaciones y ausencias. Tocá uno para aprobarlo o rechazarlo. Con "Cargar ausencia" anotás cuando alguien avisa por teléfono.',
+  reemplazos: 'Acá ves quién cubre a quién. Rojo es lo que falta. Tocá "Asignar" o "Cubrir por partes u otra persona" para elegir quién cubre y en qué horario.',
+  asistencia: 'Acá ves los fichajes del mes, las llegadas tarde y las faltas sin aviso. Si alguien avisó, tocá "Justificar". Si se olvidó de fichar, usá "+ Fichaje manual".',
+  ajustes: 'Acá se configuran los correos, el WhatsApp de recepción y la cuenta de la PC de recepción.',
+};
+
+// Busca a una persona nombrada en el texto (nombre, apellido o los dos)
+function personaEn(t) {
+  const n = sinTildes(t);
+  const cand = S.personal.filter(p => p.estado !== 'inactivo').map(p => {
+    const nom = sinTildes(p.nombre), ape = sinTildes(p.apellido);
+    const pts = (nom && new RegExp(`\\b${nom}\\b`).test(n) ? 2 : 0) + (ape && new RegExp(`\\b${ape}\\b`).test(n) ? 2 : 0);
+    return { p, pts };
+  }).filter(x => x.pts).sort((a, b) => b.pts - a.pts);
+  return cand[0]?.p || null;
+}
+// Fecha de la que se habla: hoy, mañana, pasado mañana, un día de la semana o 12/11
+function fechaEn(t) {
+  const n = sinTildes(t), h = new Date();
+  if (/pasado manana/.test(n)) return iso(sumarDias(h, 2));
+  if (/\bayer\b/.test(n)) return iso(sumarDias(h, -1));
+  if (/\bmanana\b/.test(n.replace(/(a|por|de) la manana/g, ''))) return iso(sumarDias(h, 1));
+  const m = n.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+  if (m) return `${h.getFullYear()}-${pad(+m[2])}-${pad(+m[1])}`;
+  const dias = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+  const i = dias.findIndex(d => n.includes(d));
+  if (i >= 0) { const dif = (i - h.getDay() + 7) % 7; return iso(sumarDias(h, dif)); }
+  if (/\bhoy\b/.test(n)) return hoy();
+  return null;
+}
+const franjaEn = t => { const n = sinTildes(t); return /(a|por|de) la manana/.test(n) ? 'm' : /tarde/.test(n) ? 't' : /noche/.test(n) ? 'n' : null; };
+
+// Quién está libre una fecha (y franja): no está de vacaciones y no tiene turno, clase ni reemplazo que se superponga
+function libresEn(f, fr) {
+  const dia = deIso(f).getDay();
+  const [a, b] = fr ? FRANJA_MIN[fr] : HORARIO_CLUB[dia] ? HORARIO_CLUB[dia].map(min) : [0, 0];
+  const ocupado = p => agenda(p, S.clases).some(s => s.dia === dia && min(s.desde) < b && min(s.hasta) > a)
+    || S.reemplazos.some(r => r.reemplazo === p.email && r.fecha === f && min(r.desde) < b && min(r.hasta) > a);
+  return activos().filter(p => !ausenteEn(p.email, f, S.ausencias) && !ocupado(p))
+    .map(p => ({ p, dijo: !!fr && (p.disponible || []).includes(`${dia}-${fr}`) }))
+    .sort((x, y) => y.dijo - x.dijo || nombreCompleto(x.p).localeCompare(nombreCompleto(y.p)));
+}
+// Un turno sin cubrir con el mejor candidato listo para asignar
+function propuestaCubrir(n) {
+  const [d, h] = faltaCubrir(n, S.reemplazos)[0] || [n.desde, n.hasta];
+  const parte = { ...n, desde: d, hasta: h };
+  const c = candidatos(parte, S.personal, S.ausencias, S.reemplazos, S.clases)[0];
+  const txt = `${fechaCorta(n.fecha).slice(0, 5)} ${n.generico ? '(horario a confirmar)' : `${d}–${h}`} · ${nom(n.titular).split(' ')[0]} · ${n.rol === 'clases' ? queCubre(n) : ROL_CORTO[n.rol]}`;
+  return { txt, acc: c ? accion('asignar', `${c.p.nombre} cubre el ${fechaCorta(n.fecha).slice(0, 5)}${n.generico ? '' : ' ' + d}`, { titular: n.titular, fecha: n.fecha, desde: n.generico ? '' : d, hasta: n.generico ? '' : h, reemplazo: c.p.email }) : null };
+}
+
+function responderLocal(texto) {
+  const n = sinTildes(texto);
+  const quien = personaEn(texto), f = fechaEn(texto), fr = franjaEn(texto);
+  const listar = (xs, max = 5) => xs.slice(0, max).join(' · ') + (xs.length > max ? ` y ${xs.length - max} más` : '');
+
+  // Cómo se usa la pantalla
+  if (/como (se usa|uso|hago|funciona)|que hago aca|ayuda|esta pantalla/.test(n)) {
+    return { respuesta: `Estás en ${NOMBRE_TAB[S.tab]}. ${AYUDA_TAB[S.tab] || ''}`, acciones: [] };
+  }
+  // Ir a una pantalla
+  const tabNombrada = Object.keys(NOMBRE_TAB).find(k => n.includes(sinTildes(NOMBRE_TAB[k]).split(' ')[0]) && /(ir|llevame|abri|mostrame|ver) /.test(n));
+  if (tabNombrada) return { respuesta: `Te llevo a ${NOMBRE_TAB[tabNombrada]}.`, acciones: [accion('ir', `Ir a ${NOMBRE_TAB[tabNombrada]}`, { tab: tabNombrada })] };
+
+  // Avisó que falta (cargar ausencia)
+  if (quien && /(avis|no viene|no va a venir|falta el|faltar|enferm|medico)/.test(n) && f) {
+    return { respuesta: `Te abro la ausencia de ${quien.nombre} del ${fechaLarga(f)} para que la confirmes.`,
+      acciones: [accion('cargar_ausencia', `Cargar ausencia de ${quien.nombre}`, { email: quien.email, tipoAusencia: /vacacion/.test(n) ? 'vacaciones' : 'ausencia', fecha: f, hasta: f, motivo: /medico/.test(n) ? 'Médico' : /enferm/.test(n) ? 'Enfermedad' : '' })] };
+  }
+  // Se olvidó de fichar
+  if (quien && /(olvid|no fich|fichaje)/.test(n)) {
+    return { respuesta: `Te abro el fichaje manual de ${quien.nombre}${f ? ' del ' + fechaLarga(f) : ''}.`, acciones: [accion('fichaje_manual', `Fichaje manual de ${quien.nombre}`, { email: quien.email, fecha: f || hoy() })] };
+  }
+  // Quién está libre
+  if (/(libre|disponible|puede cubrir|quien puede)/.test(n)) {
+    const fecha = f || hoy();
+    const ls = libresEn(fecha, fr);
+    const cuando = `${fechaLarga(fecha)}${fr ? ' a la ' + FRANJAS[fr].toLowerCase() : ''}`;
+    return { respuesta: ls.length ? `Libres el ${cuando}: ${listar(ls.map(x => `${nombreCompleto(x.p)}${x.dijo ? ' (dijo que puede)' : ''}`), 8)}.` : `El ${cuando} no encontré a nadie libre.`,
+      acciones: ls.slice(0, 3).map(x => accion('ver_ficha', `Ver ${x.p.nombre}`, { email: x.p.email })) };
+  }
+  // Quién cubre a alguien / qué tiene alguien
+  if (quien && /(cubre|reemplaz)/.test(n)) {
+    const rs = S.reemplazos.filter(r => r.titular === quien.email && r.fecha >= hoy()).sort((a, b) => a.fecha.localeCompare(b.fecha) || a.desde.localeCompare(b.desde));
+    const falta = necesidadesFuturas(hoy(), iso(sumarDias(new Date(), 35))).filter(x => x.titular === quien.email && faltaCubrir(x, S.reemplazos).length);
+    const props = falta.slice(0, 3).map(propuestaCubrir).filter(x => x.acc);
+    return { respuesta: `${rs.length ? `A ${quien.nombre} lo cubren: ${listar(rs.map(r => `${nomR(r).split(' ')[0]} ${fechaCorta(r.fecha).slice(0, 5)} ${r.desde}–${r.hasta}`), 6)}.` : `A ${quien.nombre} no lo cubre nadie todavía.`}${falta.length ? ` Falta cubrir ${falta.length} turno(s).` : ''}`,
+      acciones: props.map(x => x.acc).concat(falta.length > props.length ? [accion('ir', 'Ver reemplazos', { tab: 'reemplazos' })] : []).slice(0, 4) };
+  }
+  if (quien && /(horario|trabaja|clases|cuando viene|que dias)/.test(n)) {
+    const ag = agenda(quien, S.clases);
+    return { respuesta: ag.length ? `${quien.nombre}: ${listar(ag.map(s => `${DIAS_CORTOS[s.dia]} ${s.desde}–${s.hasta} ${s.actividad || ROL_CORTO[s.rol]}`), 8)}.` : `${quien.nombre} no tiene horarios cargados.`,
+      acciones: [accion('ver_ficha', `Ver ficha de ${quien.nombre}`, { email: quien.email })] };
+  }
+  // Qué falta cubrir
+  if (/(sin cubrir|falta cubrir|cubrir|reemplazo)/.test(n)) {
+    const hasta = iso(sumarDias(new Date(), /mes/.test(n) ? 30 : 7));
+    const sin = necesidadesFuturas(f || hoy(), f || hasta).filter(x => faltaCubrir(x, S.reemplazos).length);
+    if (!sin.length) return { respuesta: f ? `El ${fechaLarga(f)} está todo cubierto.` : 'Está todo cubierto. 👍', acciones: [] };
+    const props = sin.slice(0, 3).map(propuestaCubrir);
+    return { respuesta: `Falta cubrir ${sin.length} turno(s): ${listar(props.map(x => x.txt), 3)}.`,
+      acciones: props.map(x => x.acc).filter(Boolean).concat([accion('ir', 'Ver todos', { tab: 'reemplazos' })]).slice(0, 4) };
+  }
+  // Vacaciones / pedidos
+  if (/(vacacion|pedido|pendiente|aprobar)/.test(n)) {
+    const pend = pendientesAus();
+    if (!pend.length) {
+      const prox = S.ausencias.filter(a => a.estado === 'aprobada' && a.hasta >= hoy()).sort((a, b) => a.desde.localeCompare(b.desde));
+      return { respuesta: `No hay pedidos para responder.${prox.length ? ` Próximas: ${listar(prox.map(a => `${(a.nombre || nom(a.email)).split(' ')[0]} ${rangoTexto(a.desde, a.hasta)}`), 4)}.` : ''}`, acciones: [] };
+    }
+    const a = pend[0];
+    return { respuesta: `Hay ${pend.length} pedido(s): ${listar(pend.map(x => `${(x.nombre || nom(x.email)).split(' ')[0]} ${rangoTexto(x.desde, x.hasta)}`), 4)}.`,
+      acciones: [accion('aprobar', `Aprobar a ${(a.nombre || '').split(' ')[0]}`, { ausenciaId: a.id }), accion('rechazar', 'Rechazar', { ausenciaId: a.id }), accion('ir', 'Ver todos', { tab: 'vacaciones' })] };
+  }
+  // Censo
+  if (/censo|ficha/.test(n)) {
+    const { filas } = estadoCenso();
+    const faltan = filas.filter(x => x.estado === 'sin-enviar' || x.estado === 'enviado');
+    const porAprobar = pendientesFicha();
+    return { respuesta: `${faltan.length ? `Faltan completar el censo: ${listar(faltan.map(x => x.r.nombre || ''), 6)}.` : 'Todos completaron el censo.'}${porAprobar.length ? ` Hay ${porAprobar.length} ficha(s) para aprobar.` : ''}`,
+      acciones: [accion('mensaje_censo', 'Copiar mensaje del censo'), ...porAprobar.slice(0, 2).map(p => accion('aprobar_ficha', `Aprobar a ${p.nombre}`, { email: p.email })), accion('ir', 'Ver censo', { tab: 'censo' })].slice(0, 4) };
+  }
+  // Quién falta / quién vino
+  if (/(falta|vino|ausente|quien esta|hoy)/.test(n)) {
+    const fecha = f || hoy();
+    const aus = S.ausencias.filter(a => a.estado === 'aprobada' && a.desde <= fecha && a.hasta >= fecha);
+    const sin = necesidadesFuturas(fecha, fecha).filter(x => faltaCubrir(x, S.reemplazos).length);
+    return { respuesta: `${aus.length ? `El ${fechaLarga(fecha)} no vienen: ${listar(aus.map(a => (a.nombre || nom(a.email)).split(' ')[0]))}.` : `El ${fechaLarga(fecha)} no falta nadie con aviso.`}${sin.length ? ` Quedan ${sin.length} turno(s) sin cubrir.` : ''}`,
+      acciones: [accion('ver_dia', 'Ver el día', { fecha }), ...(sin.length ? [accion('ir', 'Ver reemplazos', { tab: 'reemplazos' })] : [])] };
+  }
+  if (quien) return { respuesta: `¿Qué querés saber de ${quien.nombre}? Te dejo su ficha.`, acciones: [accion('ver_ficha', `Ver ficha de ${quien.nombre}`, { email: quien.email })] };
+  return { respuesta: 'No te entendí. Probá con una de las preguntas de abajo, o con palabras como "¿quién está libre el martes a la tarde?", "¿quién cubre a Roberto?" o "Diego avisó que el jueves no viene".', acciones: [] };
+}
+
 async function preguntarIA(texto) {
   const c = S.config || {};
+  // Sin IA paga: responde la app con sus propias reglas (gratis y sin mandar datos afuera)
+  if (!c.asistenteIA && !(DEMO && window.__asistentePrueba)) return responderLocal(texto);
   // Historial: solo texto (los datos van frescos en el último mensaje)
   const mensajes = AS.chat.filter(m => !m.error && !m.local).slice(-8).map(m => ({ role: m.rol === 'yo' ? 'user' : 'assistant', content: m.texto }));
   mensajes.push({ role: 'user', content: `DATOS (actualizados ahora):\n${JSON.stringify(datosAsistente())}\n\nPREGUNTA: ${texto}` });
   if (DEMO) {
-    if (window.__asistentePrueba) return window.__asistentePrueba(texto, datosAsistente());
-    return { respuesta: 'En la demo el asistente no está conectado a la IA. En la app real responde con los datos del club. Igual podés usar los botones de "Para resolver hoy".', acciones: [] };
+    return window.__asistentePrueba(texto, datosAsistente());
   }
   if (!c.correoScriptUrl) throw new Error('Falta conectar el script de Google en Ajustes.');
   const r = await fetch(c.correoScriptUrl, {
