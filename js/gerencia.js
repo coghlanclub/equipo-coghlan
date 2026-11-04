@@ -443,40 +443,46 @@ function selectorSedes() {
   return `<div class="seg" role="group" aria-label="Sede">${sedes.map(s => `<button data-sede="${esc(s)}" aria-pressed="${S.sede === s}">${esc(s)}</button>`).join('')}</div>`;
 }
 // Colores fijos por persona (para reconocer a cada uno de un vistazo)
-const colorDe = clave => { let h = 0; for (const c of clave) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const colorDe = clave => { let h = 0; for (const c of clave) h = (h * 31 + c.charCodeAt(0)) % 280; return 40 + h; }; // sin rojos: el rojo es "sin nadie"
 const estiloPersona = clave => { const h = colorDe(clave); return `background:hsl(${h} 65% 50% / .3);border-left:4px solid hsl(${h} 70% 60%)`; };
 const lunesDe = d => sumarDias(d, -((d.getDay() + 6) % 7));
+const profesSala = () => S.personal.filter(p => p.estado !== 'inactivo' && ((p.roles || []).includes('musculacion') || (p.horarios || []).some(s => s.rol === 'musculacion')));
+const turnosSala = () => profesSala().flatMap(p => (p.horarios || []).filter(s => s.rol === 'musculacion').map(s => ({ ...s, p })));
+const INI_CLUB = Math.min(...DIAS_LABORABLES.map(d => min(HORARIO_CLUB[d][0]))), FIN_CLUB = Math.max(...DIAS_LABORABLES.map(d => min(HORARIO_CLUB[d][1])));
+// Bloques de la sala de un día: turnos, ausentes (con quién los cubre) y horarios sin nadie.
+// Con fecha (f) se tienen en cuenta vacaciones y reemplazos; sin fecha es la semana tipo.
+function bloquesSala(d, f, turnos = turnosSala()) {
+  const out = [];
+  for (const t of turnos.filter(t => t.dia === d)) {
+    const aus = f && ausenteEn(t.p.email, f, S.ausencias);
+    out.push({ desde: t.desde, hasta: t.hasta, nombre: nombreCompleto(t.p), clave: t.p.email, tipo: aus ? 'ausente' : 'turno', email: t.p.email });
+    if (aus) for (const r of reemplazosDe({ titular: t.p.email, fecha: f, desde: t.desde, hasta: t.hasta, actividad: '' }, S.reemplazos))
+      out.push({ desde: r.desde, hasta: r.hasta, nombre: nomR(r), clave: r.reemplazo, tipo: 'cubre', aQuien: t.p.nombre || nombreCompleto(t.p), email: r.externo ? '' : r.reemplazo });
+  }
+  for (const [a, b] of huecos(d, out.filter(b => b.tipo !== 'ausente'))) out.push({ desde: a, hasta: b, nombre: 'Sin nadie', tipo: 'hueco' });
+  // Si dos se superponen, van uno al lado del otro (carriles)
+  out.sort((x, y) => min(x.desde) - min(y.desde) || min(y.hasta) - min(x.hasta));
+  const carriles = [];
+  for (const b of out) { let i = carriles.findIndex(f => f <= min(b.desde)); if (i < 0) { i = carriles.length; carriles.push(0); } carriles[i] = min(b.hasta); b.carril = i; }
+  out.forEach(b => { b.de = carriles.length; });
+  return out;
+}
+const estiloBloque = b => b.tipo === 'hueco' ? 'background:color-mix(in srgb,var(--accent) 22%,transparent);border:1px dashed var(--accent);color:var(--accent)'
+  : b.tipo === 'ausente' ? 'background:repeating-linear-gradient(135deg,rgba(127,127,127,.18) 0 6px,transparent 6px 12px);border:1px dashed var(--muted);color:var(--muted)'
+  : estiloPersona(b.clave);
 function grillaSala(v) {
-  const profes = S.personal.filter(p => p.estado !== 'inactivo' && ((p.roles || []).includes('musculacion') || (p.horarios || []).some(s => s.rol === 'musculacion')));
-  const turnos = profes.flatMap(p => (p.horarios || []).filter(s => s.rol === 'musculacion').map(s => ({ ...s, p })));
+  const profes = profesSala();
+  const turnos = turnosSala();
   const sinTurno = profes.filter(p => !turnos.some(t => t.p === p));
   // Semana tipo (sin fechas) o una semana real, con vacaciones y reemplazos
   const lunes = S.semanaSala ? deIso(S.semanaSala) : null;
   const fechaDe = d => lunes ? iso(sumarDias(lunes, d - 1)) : null;
-  const ini = Math.min(...DIAS_LABORABLES.map(d => min(HORARIO_CLUB[d][0]))), fin = Math.max(...DIAS_LABORABLES.map(d => min(HORARIO_CLUB[d][1])));
+  const ini = INI_CLUB, fin = FIN_CLUB;
   const PX = 46 / 60; // alto de cada minuto
-  const bloquesDe = d => {
-    const f = fechaDe(d), out = [];
-    for (const t of turnos.filter(t => t.dia === d)) {
-      const aus = f && ausenteEn(t.p.email, f, S.ausencias);
-      out.push({ desde: t.desde, hasta: t.hasta, nombre: nombreCompleto(t.p), clave: t.p.email, tipo: aus ? 'ausente' : 'turno', email: t.p.email });
-      if (aus) for (const r of reemplazosDe({ titular: t.p.email, fecha: f, desde: t.desde, hasta: t.hasta, actividad: '' }, S.reemplazos))
-        out.push({ desde: r.desde, hasta: r.hasta, nombre: nomR(r), clave: r.reemplazo, tipo: 'cubre', aQuien: t.p.nombre || nombreCompleto(t.p), email: r.externo ? '' : r.reemplazo });
-    }
-    const presentes = out.filter(b => b.tipo !== 'ausente');
-    for (const [a, b] of huecos(d, presentes)) out.push({ desde: a, hasta: b, nombre: 'Sin nadie', tipo: 'hueco' });
-    // Si dos se superponen, van uno al lado del otro
-    out.sort((x, y) => min(x.desde) - min(y.desde) || min(y.hasta) - min(x.hasta));
-    const carriles = [];
-    for (const b of out) { let i = carriles.findIndex(f => f <= min(b.desde)); if (i < 0) { i = carriles.length; carriles.push(0); } carriles[i] = min(b.hasta); b.carril = i; }
-    out.forEach(b => { b.de = carriles.length; });
-    return out;
-  };
+  const bloquesDe = d => bloquesSala(d, fechaDe(d), turnos);
   const bloque = b => {
     const top = (min(b.desde) - ini) * PX, alto = Math.max((min(b.hasta) - min(b.desde)) * PX - 2, 16);
-    const estilo = b.tipo === 'hueco' ? 'background:color-mix(in srgb,var(--accent) 22%,transparent);border:1px dashed var(--accent);color:var(--accent)'
-      : b.tipo === 'ausente' ? 'background:repeating-linear-gradient(135deg,rgba(127,127,127,.18) 0 6px,transparent 6px 12px);border:1px dashed var(--muted);color:var(--muted)'
-      : estiloPersona(b.clave);
+    const estilo = estiloBloque(b);
     return `<button class="sala-b" ${b.email ? `data-ficha="${esc(b.email)}"` : ''} style="top:${top}px;height:${alto}px;left:calc(${b.carril * 100 / b.de}% + 2px);width:calc(${100 / b.de}% - 4px);${estilo}" title="${esc(`${b.nombre} ${b.desde}–${b.hasta}`)}">
       <b>${esc(b.tipo === 'hueco' ? b.nombre : b.nombre.split(' ')[0])}</b><span>${b.desde}–${b.hasta}</span>${b.tipo === 'cubre' ? `<span>cubre a ${esc(b.aQuien)}</span>` : b.tipo === 'ausente' ? '<span>ausente</span>' : ''}</button>`;
   };
@@ -584,7 +590,7 @@ function grillaMes(v) {
   const [, m] = S.mesGrilla.split('-').map(Number);
   const h = hoy();
   v.innerHTML = `${navMes('mesGrilla')}
-    <div class="leyenda" style="margin:10px 0"><span><span class="ev neutro">12 clases</span> todo cubierto</span><span><span class="ev vacaciones aprobada">reemplazo</span> clase con reemplazo</span><span><span class="ev sin">sin cubrir</span> falta profesor</span></div>
+    <div class="leyenda" style="margin:10px 0"><span><span class="ev neutro">12 clases</span> todo cubierto</span><span><span class="ev vacaciones aprobada">reemplazo</span> clase con reemplazo</span><span><span class="ev sin">sin cubrir</span> falta profesor</span><span><span class="mini-sala" style="display:inline-block;width:40px;vertical-align:middle"><i style="left:0;width:60%;background:hsl(200 70% 55%)"></i><i style="left:60%;width:40%;background:var(--accent)"></i></span> sala de musculación (color por persona, rojo sin nadie)</span></div>
     <div class="cal">${['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map(d => `<div class="dn">${d}</div>`).join('')}
     ${diasCalendario(S.mesGrilla).map(d => {
       const f = iso(d); const est = estadoDelDia(f);
@@ -593,17 +599,58 @@ function grillaMes(v) {
         <span class="n">${d.getDate()}</span>
         ${est.length ? `<span class="ev neutro">${est.length} clases</span>` : ''}
         ${rem ? `<span class="ev vacaciones aprobada">${rem} reemplazo${rem > 1 ? 's' : ''}</span>` : ''}
-        ${sin ? `<span class="ev sin">${sin} sin cubrir</span>` : ''}</button>`;
+        ${sin ? `<span class="ev sin">${sin} sin cubrir</span>` : ''}
+        ${miniSala(d.getDay(), f)}</button>`;
     }).join('')}</div>`;
   enlazarNavMes(v, 'mesGrilla');
   $$('[data-dia]', v).forEach(b => b.onclick = () => verDia(b.dataset.dia));
+}
+// Barritas de la sala para la celda de un día: una fila por carril, de la hora de apertura a la de cierre
+function miniSala(d, f) {
+  if (!HORARIO_CLUB[d] || !turnosSala().length) return '';
+  const bs = bloquesSala(d, f), largo = FIN_CLUB - INI_CLUB, n = bs[0]?.de || 0;
+  const pos = b => `left:${(min(b.desde) - INI_CLUB) * 100 / largo}%;width:${(min(b.hasta) - min(b.desde)) * 100 / largo}%`;
+  const color = b => b.tipo === 'hueco' ? 'background:var(--accent)' : b.tipo === 'ausente' ? 'background:repeating-linear-gradient(90deg,var(--muted) 0 2px,transparent 2px 4px)' : `background:hsl(${colorDe(b.clave)} 70% 58%)`;
+  return Array.from({ length: n }, (_, i) => `<span class="mini-sala">${bs.filter(b => b.carril === i).map(b => `<i style="${pos(b)};${color(b)}"></i>`).join('')}</span>`).join('');
+}
+// Una barra por persona: de qué hora a qué hora está ese día (turnos, clases y reemplazos)
+function lineaDelDia(f) {
+  const dia = deIso(f).getDay();
+  if (!HORARIO_CLUB[dia]) return '';
+  const filas = [];
+  for (const p of activos()) {
+    const ag = agenda(p, S.clases).filter(s => s.dia === dia);
+    const aus = ausenteEn(p.email, f, S.ausencias);
+    const cubre = S.reemplazos.filter(r => r.fecha === f && r.reemplazo === p.email);
+    if (!ag.length && !cubre.length) continue;
+    filas.push({ nombre: nombreCompleto(p), email: p.email, bs: [
+      ...ag.map(s => ({ desde: s.desde, hasta: s.hasta, tipo: aus ? 'ausente' : 'turno', clave: p.email, txt: s.actividad || ROL_CORTO[s.rol] })),
+      ...cubre.map(r => ({ desde: r.desde, hasta: r.hasta, tipo: 'cubre', clave: p.email, txt: `cubre a ${(r.titularNombre || nom(r.titular)).split(' ')[0]}` })),
+    ] });
+  }
+  // Quien cubre y no está en el sistema
+  const ext = {};
+  for (const r of S.reemplazos.filter(r => r.fecha === f && r.externo)) (ext[r.reemplazo] = ext[r.reemplazo] || { nombre: r.reemplazoNombre, email: '', bs: [] }).bs.push({ desde: r.desde, hasta: r.hasta, tipo: 'cubre', clave: r.reemplazo, txt: `cubre a ${(r.titularNombre || nom(r.titular)).split(' ')[0]}` });
+  filas.push(...Object.values(ext));
+  const huecosSala = turnosSala().length ? bloquesSala(dia, f).filter(b => b.tipo === 'hueco') : [];
+  if (!filas.length) return '';
+  filas.sort((a, b) => Math.min(...a.bs.map(x => min(x.desde))) - Math.min(...b.bs.map(x => min(x.desde))));
+  const [a0, a1] = HORARIO_CLUB[dia].map(min), largo = a1 - a0;
+  const tramo = b => { const d = Math.max(min(b.desde), a0), h = Math.min(min(b.hasta), a1); return h <= d ? '' : `<div style="left:${(d - a0) * 100 / largo}%;width:${(h - d) * 100 / largo}%;${estiloBloque(b)}" title="${esc(`${b.txt || ''} ${b.desde}–${b.hasta}`)}">${esc(b.txt || '')} ${b.desde}–${b.hasta}</div>`; };
+  const horas = []; for (let m = Math.ceil(a0 / 60) * 60; m <= a1; m += 120) horas.push(m);
+  return `<div class="linea-dia">
+    <div class="ld-fila"><span></span><div class="ld-escala">${horas.map(m => `<span style="left:${(m - a0) * 100 / largo}%">${hhmm(m).slice(0, 2)}</span>`).join('')}</div></div>
+    ${filas.map(x => `<div class="ld-fila"><button class="btn sm ghost" ${x.email ? `data-ficha="${esc(x.email)}"` : ''}>${esc(x.nombre.split(' ')[0])}</button><div class="rem-barra">${x.bs.map(tramo).join('')}</div></div>`).join('')}
+    ${huecosSala.length ? `<div class="ld-fila"><span style="color:var(--accent);font-size:.78rem;font-weight:700">Sala sin nadie</span><div class="rem-barra">${huecosSala.map(b => tramo({ ...b, txt: '' })).join('')}</div></div>` : ''}
+  </div>`;
 }
 function verDia(f) {
   const est = estadoDelDia(f);
   const dia = deIso(f).getDay();
   const turnos = activos().flatMap(p => (p.horarios || []).filter(s => s.dia === dia).map(s => ({ ...s, p })));
-  modal(`${cabModal(fechaLarga(f))}
-    ${est.length ? `<div class="tabla-wrap"><table><thead><tr><th>Hora</th><th>Clase</th><th>Da la clase</th></tr></thead><tbody>
+  const m = modal(`${cabModal(fechaLarga(f))}
+    ${lineaDelDia(f)}
+    ${est.length ? `<h4>Clases</h4><div class="tabla-wrap"><table><thead><tr><th>Hora</th><th>Clase</th><th>Da la clase</th></tr></thead><tbody>
       ${est.map(x => `<tr><td class="mono">${x.c.desde}</td><td>${esc(x.c.actividad)} <span class="sub">· ${esc(x.c.sede)}</span></td>
         <td>${!x.tit ? '<span class="pill sin">Sin profesor</span>' : x.aus ? (x.r ? `${esc(nomsTurno({ titular: x.tit, fecha: f, desde: x.c.desde, hasta: x.c.hasta, actividad: x.c.actividad }))} <span class="pill info">reemplaza a ${esc(nom(x.tit))}</span>` : `<span class="pill sin">${esc(nom(x.tit))} ausente · sin cubrir</span>`) : esc(nom(x.tit))}</td></tr>`).join('')}
     </tbody></table></div>` : '<p class="vacio">No hay clases este día.</p>'}
@@ -615,6 +662,7 @@ function verDia(f) {
         ${aus ? `${reemplazosDe(n, S.reemplazos).length ? `<span class="pill info">cubre ${esc(nomsTurno(n))}</span>` : ''} ${falta.length ? `<span class="pill sin">sin cubrir ${falta.map(x => x.join('–')).join(', ')}</span>` : ''}` : ''}</div>`;
     }).join('')}</div>` : ''}
     <div class="modal-pie"><button class="btn ghost" data-cerrar>Cerrar</button></div>`, { ancho: true });
+  $$('[data-ficha]', m.el).forEach(b => b.onclick = () => { m.cerrar(); verFicha(P(b.dataset.ficha)); });
 }
 
 // ============================================================ VACACIONES Y AUSENCIAS
