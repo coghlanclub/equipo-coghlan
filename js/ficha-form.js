@@ -1,5 +1,5 @@
 // Formulario de ficha / censo. Lo usa el profe (alta y edición) y la gerencia.
-import { esc, ROLES, ROL_CORTO, ROLES_TURNO, DIAS, DIAS_CORTOS, DIAS_LABORABLES, ACTIVIDADES_BASE, SEDES, HORARIO_CLUB, dentroHorarioClub, min, SIN_CORREO, sinCorreo, slug, pinAleatorio, FRANJAS, FRANJAS_HORA } from './logica.js';
+import { esc, ROLES, ROL_CORTO, ROLES_TURNO, DIAS, DIAS_CORTOS, DIAS_LABORABLES, ACTIVIDADES_BASE, SEDES, HORARIO_CLUB, dentroHorarioClub, min, sumarMin, SIN_CORREO, sinCorreo, slug, pinAleatorio, FRANJAS, FRANJAS_HORA } from './logica.js';
 import { $, $$, toast } from './ui.js';
 
 // modo: 'profe' (las clases quedan declaradas para que gerencia apruebe) o 'gerencia' (asigna directo)
@@ -61,8 +61,20 @@ export function htmlFormFicha(p = {}, { modo = 'profe', clases = [] } = {}) {
               }).join('')}</div></div>`;
             }).join('')}</div></details>`;
         }).join('') || '<p class="vacio">La grilla todavía no está cargada.</p>'}</div>
+        <p class="sub" id="f-grilla-vacia" hidden>No hay clases de sus actividades en la grilla. Cargalas abajo, en "Agregar una clase que da".</p>
         <label class="check" style="justify-self:start"><input type="checkbox" id="f-filtrar" checked> Mostrar solo mis actividades</label>
       </div>
+      ${modo === 'gerencia' ? `<div class="panel" style="padding:12px;gap:10px;background:var(--bg)">
+        <b>+ Agregar una clase que da</b>
+        <span class="sub">Si su clase no está en la grilla, cargala acá. <b>Una clase por vez</b>: actividad, dónde, días y horario, y tocá "Agregar clase". Si da 3 clases distintas, lo hacés 3 veces. Se crea en la grilla a su nombre cuando tocás Guardar.</span>
+        <div id="f-nuevas" class="lista"></div>
+        <div class="fila"><label>Actividad<input id="nc-act" list="nc-acts" placeholder="Ej.: Local, Zumba" autocomplete="off"></label>
+          <label>Dónde<select id="nc-sede">${SEDES.map(x => `<option>${x}</option>`).join('')}</select></label></div>
+        <datalist id="nc-acts">${acts.map(a => `<option value="${esc(a)}">`).join('')}</datalist>
+        <div class="checks" id="nc-dias">${DIAS_LABORABLES.map(x => `<label class="check"><input type="checkbox" value="${x}"> ${DIAS_CORTOS[x]}</label>`).join('')}</div>
+        <div class="fila"><label>Desde<input id="nc-desde" type="time" value="18:00" step="900"></label><label>Hasta<input id="nc-hasta" type="time" value="19:00" step="900"></label></div>
+        <button type="button" class="btn ghost" id="nc-agregar" style="justify-self:start">+ Agregar clase</button>
+      </div>` : ''}
     </div>
 
     <div id="bloque-turnos" style="display:grid;gap:8px">
@@ -98,6 +110,8 @@ export function htmlFormFicha(p = {}, { modo = 'profe', clases = [] } = {}) {
 
 export function activarFormFicha(el, p = {}) {
   let turnos = (p.horarios || []).map(t => ({ ...t }));
+  // Clases nuevas que carga gerencia desde la ficha (se crean en la grilla al guardar)
+  const nuevas = [];
   const roles = () => $$('input[name=rol]:checked', el).map(i => i.value);
   const acts = () => $$('input[name=act]:checked', el).map(i => i.value);
 
@@ -121,6 +135,9 @@ export function activarFormFicha(el, p = {}) {
       c.hidden = filtrar && as.length > 0 && !as.includes(c.dataset.act) && !marcada;
     });
     $$('#f-grilla .fila-dia', el).forEach(f => { f.hidden = !$$('.check', f).some(c => !c.hidden); });
+    // Si el filtro deja una sede vacía, se esconde; si no queda ninguna, se avisa que se pueden agregar abajo
+    $$('#f-grilla details', el).forEach(dt => { dt.hidden = !$$('.check', dt).some(c => !c.hidden); });
+    const vacia = $('#f-grilla-vacia', el); if (vacia) vacia.hidden = !$$('#f-grilla details', el).every(dt => dt.hidden);
     $$('[data-cuenta]', el).forEach(s => {
       const n = $$(`input[name=clase][data-sede="${s.dataset.cuenta}"]:checked`, el).length;
       s.textContent = n ? `· ${n} marcada${n > 1 ? 's' : ''}` : '';
@@ -146,7 +163,35 @@ export function activarFormFicha(el, p = {}) {
     if (fuera.length) toast(`No se cargó ${fuera.join(', ')}: queda fuera del horario del club (sábados ${HORARIO_CLUB[6].join('–')})`, true);
     pintarTurnos();
   };
-  pintarTurnos(); actualizar();
+  const pintarNuevas = () => {
+    const cont = $('#f-nuevas', el); if (!cont) return;
+    cont.innerHTML = nuevas.map((c, i) => `<div class="item"><span><b>${DIAS_CORTOS[c.dia]}</b> <span class="mono">${c.desde}–${c.hasta}</span> ${esc(c.actividad)} <span class="sub">(${c.sede})</span></span>
+      <button type="button" class="btn sm ghost" data-quitar-nueva="${i}">Quitar</button></div>`).join('');
+  };
+  $('#f-nuevas', el)?.addEventListener('click', e => {
+    const b = e.target.closest('[data-quitar-nueva]'); if (!b) return;
+    nuevas.splice(+b.dataset.quitarNueva, 1); pintarNuevas();
+  });
+  // Al elegir la hora de inicio, la de fin se completa sola (1 hora después)
+  $('#nc-desde', el)?.addEventListener('change', e => { if (e.target.value) $('#nc-hasta', el).value = sumarMin(e.target.value, 60); });
+  $('#nc-agregar', el)?.addEventListener('click', () => {
+    const actividad = $('#nc-act', el).value.trim().replace(/\s+/g, ' '), sede = $('#nc-sede', el).value;
+    const dias = $$('#nc-dias input:checked', el).map(i => +i.value);
+    const desde = $('#nc-desde', el).value, hasta = $('#nc-hasta', el).value;
+    if (actividad.length < 2) return toast('Escribí qué actividad es', true);
+    if (!dias.length) return toast('Marcá qué días', true);
+    if (!desde || !hasta || min(hasta) <= min(desde)) return toast('Revisá la hora de inicio y de fin', true);
+    const fuera = dias.filter(dia => !dentroHorarioClub({ dia, desde, hasta }));
+    if (fuera.length) return toast(`${fuera.map(x => DIAS_CORTOS[x]).join(', ')}: fuera del horario del club`, true);
+    for (const dia of dias) if (!nuevas.some(c => c.dia === dia && c.desde === desde && c.sede === sede && c.actividad.toLowerCase() === actividad.toLowerCase())) nuevas.push({ actividad, sede, dia, desde, hasta });
+    nuevas.sort((a, b) => a.dia - b.dia || a.desde.localeCompare(b.desde));
+    // La actividad queda marcada como "sabe dar"
+    const chk = $$('input[name=act]', el).find(i => i.value.toLowerCase() === actividad.toLowerCase()); if (chk) chk.checked = true;
+    $('#nc-act', el).value = ''; $$('#nc-dias input', el).forEach(i => { i.checked = false; });
+    pintarNuevas(); actualizar();
+    toast(`Agregada ${actividad}. Si da otra clase, cargala igual. Al final tocá Guardar.`);
+  });
+  pintarTurnos(); pintarNuevas(); actualizar();
 
   return {
     leer() {
@@ -159,6 +204,7 @@ export function activarFormFicha(el, p = {}) {
       };
       d.actividades = d.roles.includes('clases') ? acts() : [];
       d.clases = d.roles.includes('clases') ? $$('input[name=clase]:checked', el).map(i => i.value) : [];
+      d.clasesNuevas = d.roles.includes('clases') ? nuevas.map(c => ({ ...c })) : [];
       d.horarios = turnos.filter(t => d.roles.includes(t.rol));
       d.dni = $('#f-dni', el).value.replace(/\D/g, '');
       d.direccion = $('#f-dir', el).value.trim();
@@ -183,6 +229,7 @@ export function activarFormFicha(el, p = {}) {
       if (!sinCorreo(d) && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.email)) faltan.push('correo (o marcá Ficha sin celular)');
       if (!d.roles.length) faltan.push('rol');
       if (faltan.length) { toast('Falta completar: ' + faltan.join(', '), true); return null; }
+      if (d.roles.includes('clases') && !d.actividades.length && d.clasesNuevas.length) d.actividades = [...new Set(d.clasesNuevas.map(c => c.actividad))];
       if (d.roles.includes('clases') && !d.actividades.length) { toast('Marcá al menos una actividad que sabés dar', true); return null; }
       return d;
     },

@@ -387,11 +387,23 @@ function editarFicha(p) {
   const f = activarFormFicha($('#form-ficha', m.el), p);
   $('#fe-ok', m.el).onclick = async () => {
     const d = f.leer(); if (!d) return;
-    if (nueva && P(d.email)) return toast('Ya existe una ficha con ese correo', true);
-    const { clases, ...resto } = d;
+    // Si ya estaba cargada (por el censo o antes), se ofrece abrir su ficha en vez de no hacer nada
+    if (nueva && P(d.email)) {
+      const ya = P(d.email);
+      if (await confirmar(`<b>${esc(nombreCompleto(ya))}</b> ya tiene ficha con ese correo${ya.estado === 'pendiente' ? ' (por aprobar)' : ''}. ¿Abrir su ficha para completarla?`, { si: 'Abrir su ficha' })) { m.cerrar(); editarFicha(ya); }
+      return;
+    }
+    const { clases, clasesNuevas = [], ...resto } = d;
     const antes = S.clases.filter(c => c.profesor === d.email).map(c => c.id);
-    const ops = [{ c: 'personal', id: d.email, data: { ...resto, clasesDeclaradas: clases, actualizado: AHORA, ...(nueva ? { creado: AHORA } : {}) }, merge: true }];
-    for (const id of clases) if (!antes.includes(id)) ops.push({ c: 'clases', id, data: { profesor: d.email, profesorNombre: nombreCompleto(d) }, merge: true });
+    // Las clases nuevas se crean en la grilla a su nombre (o se le asignan si ya existían)
+    const creadas = [];
+    for (const c of clasesNuevas) {
+      const id = idClase(c);
+      if (!clases.includes(id)) clases.push(id);
+      if (!S.clases.some(x => x.id === id)) creadas.push({ c: 'clases', id, data: { ...c, profesor: d.email, profesorNombre: nombreCompleto(d), origen: 'gerencia', creado: AHORA } });
+    }
+    const ops = [{ c: 'personal', id: d.email, data: { ...resto, clasesDeclaradas: clases, actualizado: AHORA, ...(nueva ? { creado: AHORA } : {}) }, merge: true }, ...creadas];
+    for (const id of clases) if (!antes.includes(id) && !creadas.some(o => o.id === id)) ops.push({ c: 'clases', id, data: { profesor: d.email, profesorNombre: nombreCompleto(d) }, merge: true });
     for (const id of antes) if (!clases.includes(id)) ops.push({ c: 'clases', id, data: { profesor: '', profesorNombre: '' }, merge: true });
     try { await lote(ops); m.cerrar(); toast('Ficha guardada'); } catch (e) { console.error(e); toast('No se pudo guardar', true); }
   };
