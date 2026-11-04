@@ -325,3 +325,20 @@ td.num, th.num { text-align: right; }
 .ld-escala { position: relative; height: 14px; font: 600 .66rem var(--f-mono); color: var(--muted); }
 .ld-escala span { position: absolute; transform: translateX(-50%); }
 .ld-escala span:first-child { transform: none; }
+
+/* Asistente (IA): botón fijo abajo a la derecha y panel lateral */
+#asistente .as-boton { position: fixed; right: 18px; bottom: 18px; z-index: 40; background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 99px; padding: 12px 18px; font: 700 .95rem var(--f-body); cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+#asistente.abierto .as-boton { display: none; }
+#asistente .as-panel { display: none; }
+#asistente.abierto .as-panel { display: flex; flex-direction: column; gap: 10px; position: fixed; right: 0; top: 0; bottom: 0; width: min(420px, 100vw); z-index: 45; background: var(--surface); border-left: 1px solid var(--line); padding: 14px; box-shadow: -8px 0 30px rgba(0,0,0,.35); }
+.as-cab { display: flex; justify-content: space-between; align-items: center; font-size: 1.05rem; }
+.as-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.as-chips .chip { background: var(--surface-2); border: 1px solid var(--line); color: var(--fg); border-radius: 99px; padding: 7px 11px; font: 600 .82rem var(--f-body); cursor: pointer; text-align: left; }
+.as-chat { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
+.as-yo { align-self: flex-end; background: color-mix(in srgb, var(--accent) 25%, var(--surface-2)); border-radius: 12px 12px 2px 12px; padding: 8px 11px; max-width: 85%; }
+.as-ia { align-self: flex-start; background: var(--surface-2); border-radius: 12px 12px 12px 2px; padding: 9px 12px; max-width: 92%; line-height: 1.45; white-space: pre-wrap; }
+.as-ia.error { border: 1px solid var(--warn); color: var(--warn); }
+.as-pensando { color: var(--muted); }
+.as-acc { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; white-space: normal; }
+.as-form { display: flex; gap: 8px; }
+.as-form input { flex: 1; }
