@@ -843,13 +843,18 @@ function responder(a, aprobar) {
   };
 }
 
-function cargarAusencia(email = '') {
+function cargarAusencia(email = '', pre = {}) {
   const m = modal(`${cabModal('Cargar ausencia')}<p class="sub">Para cuando avisan por teléfono o en persona. Queda aprobada directamente.</p>
     <div class="form"><label>Persona<select id="ca-p">${activos().sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b))).map(p => `<option value="${esc(p.email)}" ${p.email === email ? 'selected' : ''}>${esc(nombreCompleto(p))}</option>`).join('')}</select></label>
       <div class="fila"><label>Tipo<select id="ca-t"><option value="ausencia">Ausencia</option><option value="vacaciones">Vacaciones</option></select></label>
         <label>Desde<input type="date" id="ca-d" value="${hoy()}"></label><label>Hasta<input type="date" id="ca-h" value="${hoy()}"></label></div>
       <label>Motivo<input id="ca-m"></label></div>
     <div class="modal-pie"><button class="btn ghost" data-cerrar>Cancelar</button><button class="btn" id="ca-ok">Guardar</button></div>`);
+  // El asistente la puede abrir ya completa (tipo, fechas y motivo)
+  if (pre.tipo) $('#ca-t', m.el).value = pre.tipo;
+  if (pre.desde) $('#ca-d', m.el).value = pre.desde;
+  if (pre.hasta || pre.desde) $('#ca-h', m.el).value = pre.hasta || pre.desde;
+  if (pre.motivo) $('#ca-m', m.el).value = pre.motivo;
   $('#ca-d', m.el).onchange = e => { if ($('#ca-h', m.el).value < e.target.value) $('#ca-h', m.el).value = e.target.value; };
   $('#ca-ok', m.el).onclick = async () => {
     const e = $('#ca-p', m.el).value, desde = $('#ca-d', m.el).value, hasta = $('#ca-h', m.el).value;
@@ -1027,7 +1032,7 @@ function vAsistencia(v) {
   $('#mes').onchange = e => { if (!e.target.value) return; S.mesAsis = e.target.value; suscribirMes(); render(); };
   $$('[data-filtrar]', v).forEach(b => b.onclick = () => { S.personaAsis = b.dataset.filtrar; render(); });
   $('#todos')?.addEventListener('click', () => { S.personaAsis = ''; render(); });
-  $('#manual').onclick = fichajeManual;
+  $('#manual').onclick = () => fichajeManual();
   $$('[data-justificar]', v).forEach(b => b.onclick = async () => {
     const [e, f] = b.dataset.justificar.split('|');
     await agregar('ausencias', { email: e, nombre: nom(e), tipo: 'ausencia', desde: f, hasta: f, motivo: 'Justificada por gerencia', estado: 'aprobada', creado: AHORA, respondida: AHORA, respondidaPor: S.user.email, cargadaPorGerencia: true });
@@ -1044,12 +1049,16 @@ function vAsistencia(v) {
   };
 }
 
-function fichajeManual() {
+function fichajeManual(pre = {}) {
   const m = modal(`${cabModal('Fichaje manual')}<p class="sub">Para cuando alguien se olvidó de fichar. Queda marcado como manual.</p>
     <div class="form"><label>Persona<select id="fm-p">${activos().sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b))).map(p => `<option value="${esc(p.email)}">${esc(nombreCompleto(p))}</option>`).join('')}</select></label>
     <div class="fila"><label>Fecha<input type="date" id="fm-f" value="${hoy()}"></label><label>Hora<input type="time" id="fm-h" value="${pad(new Date().getHours())}:${pad(new Date().getMinutes())}"></label>
       <label>Tipo<select id="fm-t"><option value="entrada">Entrada</option><option value="salida">Salida</option></select></label></div></div>
     <div class="modal-pie"><button class="btn ghost" data-cerrar>Cancelar</button><button class="btn" id="fm-ok">Guardar</button></div>`);
+  if (pre.email) $('#fm-p', m.el).value = pre.email;
+  if (pre.fecha) $('#fm-f', m.el).value = pre.fecha;
+  if (pre.hora) $('#fm-h', m.el).value = pre.hora;
+  if (pre.tipo) $('#fm-t', m.el).value = pre.tipo;
   $('#fm-ok', m.el).onclick = async () => {
     const e = $('#fm-p', m.el).value, f = $('#fm-f', m.el).value, h = $('#fm-h', m.el).value;
     if (!e || !f || !h) return toast('Completá todos los datos', true);
@@ -1187,56 +1196,99 @@ registrarGuia({
 });
 
 // ============================================================ ASISTENTE (IA)
-// Un panel para preguntar con palabras comunes ("¿quién cubre a Roberto?") y resolver con un toque.
-// La app arma un resumen de los datos y se lo manda al script de Google (el mismo de los correos),
-// que le pregunta a Claude. Claude contesta corto y propone acciones; nada se hace sin que alguien
-// toque el botón y confirme.
-const PREGUNTAS = ['¿Qué falta cubrir esta semana?', '¿Quién falta hoy?', '¿Quién está libre mañana a la tarde?', '¿Qué vacaciones hay pendientes de aprobar?'];
-const AS = { abierto: false, chat: [], esperando: false };
+// Ayuda a usar TODA la app a quien no se lleva bien con la tecnología:
+// - "Para resolver hoy": lo pendiente, con botones de un toque (no necesita IA).
+// - Preguntas con palabras comunes (escritas o dictadas por voz). Claude contesta corto, lleva a la
+//   pantalla que corresponde y propone acciones. Nada se hace sin que alguien toque el botón y confirme.
+// La app arma un resumen de los datos y se lo manda al script de Google (el mismo de los correos), que le pregunta a Claude.
+const PREGUNTAS = ['¿Qué tengo que hacer hoy?', '¿Qué falta cubrir esta semana?', '¿Quién está libre mañana a la tarde?', '¿Cómo se usa esta pantalla?'];
+const AS = { abierto: false, chat: [], esperando: false, escuchando: false };
+const NOMBRE_TAB = Object.fromEntries(TABS);
 
-const SISTEMA_ASISTENTE = `Sos el asistente de gerencia de Coghlan Club, un gimnasio de Buenos Aires. Te escriben los socios del club, que no se llevan bien con la tecnología.
-Respondé en castellano rioplatense, muy corto y claro: 1 a 4 oraciones, sin tecnicismos, sin listas largas. Usá nombres de pila.
-Basate solo en los DATOS que vienen en cada mensaje (personal, horarios, vacaciones, reemplazos y turnos sin cubrir). Si algo no está en los datos, decilo.
+const SISTEMA_ASISTENTE = `Sos el asistente de la app de gerencia de Coghlan Club, un gimnasio de Buenos Aires (Washington 2558, Coghlan). Te usan los socios del club, que no se llevan bien con la tecnología: tu trabajo es que puedan hacer TODO desde acá, sin buscar botones.
+Respondé en castellano rioplatense, muy corto y claro: 1 a 4 oraciones, sin tecnicismos ni listas largas. Usá nombres de pila. Si te piden algo que se hace con un botón, ofrecé el botón en "acciones" en vez de explicar dónde está.
+Basate solo en los DATOS que vienen en cada mensaje. Si algo no está, decilo.
+
+La app (pestañas de arriba):
+- Hoy: quién vino, quién falta y qué hay sin cubrir hoy.
+- Censo: los profes completan su ficha desde el link; acá se ve quién falta y se aprueban.
+- Personal: fichas de cada persona (datos, horarios, celular para fichar, PIN si no tiene celular).
+- Grilla de clases: las clases por sede (Sede, Anexo, Aranceladas) y la sala de Musculación con barras de color; Calendario del mes con barras por día.
+- Vacaciones y ausencias: pedidos para aprobar o rechazar, calendario e historial.
+- Reemplazos: quién cubre a quién; un turno se puede cubrir por partes y con alguien que no está en el sistema.
+- Asistencia: fichajes del QR, llegadas tarde, faltas sin aviso (se pueden justificar) y fichaje manual.
+- Ajustes: correos, WhatsApp, cuenta de recepción.
+
 Para buscar quién puede cubrir: mismo rol (y misma actividad si es una clase), que no esté de vacaciones ese día y que no tenga otro turno, clase o reemplazo que se superponga. Preferí a quien marcó que puede cubrir en esa franja y a quien tiene menos reemplazos en el mes.
-Cuando se pueda resolver algo con un toque, proponelo en "acciones" (máximo 4). Tipos:
-- "asignar": que alguien cubra a un titular una fecha, de "desde" a "hasta" (dentro de un turno que figure en turnos_a_cubrir). "reemplazo" es el email de quien cubre; si no está en el personal, dejá el email vacío y poné su nombre en "reemplazoNombre".
-- "aprobar" / "rechazar": un pedido de vacaciones o ausencia pendiente ("ausenciaId").
-- "quitar_reemplazo": sacar un reemplazo ya asignado ("reemplazoId").
-"etiqueta" es el texto del botón, corto (ej. "Asignar a Diego 11 a 12"). En los campos que no usa una acción, poné "".
-No inventes emails ni ids: copialos de los datos. Si no hay nada para hacer, "acciones" va vacío.`;
 
+"acciones" (máximo 4), cada una con "tipo" y "etiqueta" (texto corto del botón, ej. "Asignar a Diego 11 a 12"). En los campos que una acción no usa, poné "". Tipos:
+- "ir": llevar a una pestaña ("tab": hoy, censo, personal, grilla, vacaciones, reemplazos, asistencia o ajustes).
+- "ver_ficha" ("email"), "ver_dia" ("fecha"), "ver_pedido" ("ausenciaId"): abrir el detalle.
+- "asignar": que alguien cubra a un titular una fecha, de "desde" a "hasta", dentro de un turno de turnos_a_cubrir. "reemplazo" = email de quien cubre; si no está en el personal, email vacío y su nombre en "reemplazoNombre".
+- "quitar_reemplazo" ("reemplazoId").
+- "aprobar" / "rechazar": un pedido pendiente ("ausenciaId").
+- "aprobar_ficha" ("email"): una ficha nueva del censo.
+- "habilitar_celular" ("email"): cuando alguien cambió de celular y no puede fichar.
+- "cargar_ausencia": cuando alguien avisó por teléfono ("email", "tipoAusencia" vacaciones o ausencia, "fecha" = desde, "hasta", "motivo").
+- "justificar_falta" ("email", "fecha"): una falta sin aviso que en realidad avisó.
+- "fichaje_manual" ("email", "fecha", "desde" = hora, "tipoFichaje" entrada o salida): cuando alguien se olvidó de fichar.
+- "mensaje_censo": copiar el mensaje para mandar el link del censo por WhatsApp.
+No inventes emails ni ids: copialos de los datos.`;
+
+const CAMPOS_ACCION = ['tipo', 'etiqueta', 'tab', 'email', 'fecha', 'desde', 'hasta', 'ausenciaId', 'reemplazoId', 'titular', 'reemplazo', 'reemplazoNombre', 'tipoAusencia', 'tipoFichaje', 'motivo'];
+const TIPOS_ACCION = ['ir', 'ver_ficha', 'ver_dia', 'ver_pedido', 'asignar', 'quitar_reemplazo', 'aprobar', 'rechazar', 'aprobar_ficha', 'habilitar_celular', 'cargar_ausencia', 'justificar_falta', 'fichaje_manual', 'mensaje_censo'];
 const ESQUEMA_ASISTENTE = {
   type: 'object', additionalProperties: false, required: ['respuesta', 'acciones'],
   properties: {
     respuesta: { type: 'string' },
     acciones: { type: 'array', items: {
-      type: 'object', additionalProperties: false,
-      required: ['tipo', 'etiqueta', 'ausenciaId', 'reemplazoId', 'titular', 'fecha', 'desde', 'hasta', 'reemplazo', 'reemplazoNombre'],
-      properties: {
-        tipo: { type: 'string', enum: ['asignar', 'aprobar', 'rechazar', 'quitar_reemplazo'] },
-        etiqueta: { type: 'string' }, ausenciaId: { type: 'string' }, reemplazoId: { type: 'string' },
-        titular: { type: 'string' }, fecha: { type: 'string' }, desde: { type: 'string' }, hasta: { type: 'string' },
-        reemplazo: { type: 'string' }, reemplazoNombre: { type: 'string' },
-      },
+      type: 'object', additionalProperties: false, required: CAMPOS_ACCION,
+      properties: Object.fromEntries(CAMPOS_ACCION.map(k => [k, k === 'tipo' ? { type: 'string', enum: TIPOS_ACCION } : { type: 'string' }])),
     } },
   },
 };
+// Acción con los campos vacíos completos (para las que arma la app sin IA)
+const accion = (tipo, etiqueta, campos = {}) => ({ ...Object.fromEntries(CAMPOS_ACCION.map(k => [k, ''])), tipo, etiqueta, ...campos });
+
+// Lo pendiente, calculado por la app (anda aunque la IA no esté conectada)
+function paraHoy() {
+  const items = [];
+  for (const a of pendientesAus().slice(0, 3)) items.push({ txt: `${(a.nombre || nom(a.email)).split(' ')[0]} pide ${a.tipo === 'vacaciones' ? 'vacaciones' : 'faltar'} · ${rangoTexto(a.desde, a.hasta)}`,
+    acc: [accion('aprobar', 'Aprobar', { ausenciaId: a.id }), accion('rechazar', 'Rechazar', { ausenciaId: a.id }), accion('ver_pedido', 'Ver', { ausenciaId: a.id })] });
+  if (pendientesAus().length > 3) items.push({ txt: `Hay ${pendientesAus().length - 3} pedidos más`, acc: [accion('ir', 'Ver todos', { tab: 'vacaciones' })] });
+  const sin = sinCubrir14();
+  if (sin.length) items.push({ txt: `${sin.length} turno(s) sin cubrir en las próximas 2 semanas`, acc: [accion('ir', 'Ver reemplazos', { tab: 'reemplazos' })] });
+  for (const p of pendientesFicha().slice(0, 3)) items.push({ txt: `Ficha nueva de ${nombreCompleto(p)}`, acc: [accion('aprobar_ficha', 'Aprobar', { email: p.email }), accion('ver_ficha', 'Ver', { email: p.email })] });
+  for (const p of pedidosCelular()) items.push({ txt: `${nombreCompleto(p)} cambió de celular`, acc: [accion('habilitar_celular', 'Habilitar', { email: p.email })] });
+  const csp = clasesSinProfe().length;
+  if (csp) items.push({ txt: `${csp} clase(s) sin profesor en la grilla`, acc: [accion('ir', 'Ver grilla', { tab: 'grilla' })] });
+  const ayer = iso(sumarDias(new Date(), -1));
+  const faltas = faltasSinAviso(S.personal, S.clases, S.fichajes, S.ausencias, iso(sumarDias(new Date(), -7)) < `${S.mesAsis}-01` ? `${S.mesAsis}-01` : iso(sumarDias(new Date(), -7)), ayer);
+  for (const f of faltas.slice(-3)) items.push({ txt: `${f.nombre.split(' ')[0]} no fichó el ${fechaCorta(f.fecha).slice(0, 5)}`,
+    acc: [accion('justificar_falta', 'Avisó: justificar', { email: f.email, fecha: f.fecha }), accion('fichaje_manual', 'Se olvidó de fichar', { email: f.email, fecha: f.fecha })] });
+  return items;
+}
 
 // Resumen compacto de lo que la IA necesita saber (hoy y las próximas 5 semanas)
 function datosAsistente() {
   const h = hoy(), hasta = iso(sumarDias(new Date(), 35));
   const franja = s => `${DIAS_CORTOS[s.dia]} ${s.desde}-${s.hasta}`;
+  const ini = iso(sumarDias(new Date(), -7)) < `${S.mesAsis}-01` ? `${S.mesAsis}-01` : iso(sumarDias(new Date(), -7));
   return {
     hoy: `${fechaLarga(h)} (${h})`,
+    pantalla_actual: NOMBRE_TAB[S.tab] || S.tab,
     horario_club: DIAS_LABORABLES.map(d => `${DIAS_CORTOS[d]} ${HORARIO_CLUB[d].join('-')}`).join(', '),
-    personal: activos().map(p => ({
-      email: p.email, nombre: nombreCompleto(p), roles: (p.roles || []).map(r => ROL_CORTO[r]), actividades: p.actividades || [],
+    personal: S.personal.filter(p => p.estado !== 'inactivo').map(p => ({
+      email: p.email, nombre: nombreCompleto(p), estado: p.estado || 'activo', roles: (p.roles || []).map(r => ROL_CORTO[r]), actividades: p.actividades || [],
+      telefono: p.telefono || '', sin_celular: !!p.sinCelular, pidio_habilitar_celular: !!(p.pedidoDispositivo?.id && p.pedidoDispositivo.id !== p.dispositivo),
       horario: agenda(p, S.clases).map(s => `${franja(s)} ${s.actividad || ROL_CORTO[s.rol]}${s.sede ? ' (' + s.sede + ')' : ''}`),
       puede_cubrir: p.disponible || [],
       reemplazos_este_mes: S.reemplazos.filter(r => r.reemplazo === p.email && r.fecha.slice(0, 7) === h.slice(0, 7)).length,
     })),
+    censo: estadoCenso().filas.filter(f => f.estado !== 'listo').map(f => ({ nombre: f.r.nombre || '', estado: ESTADO_CENSO[f.estado]?.[0] || f.estado })),
     vacaciones_y_ausencias: S.ausencias.filter(a => a.hasta >= h && a.estado !== 'rechazada').map(a => ({
       ausenciaId: a.id, email: a.email, nombre: a.nombre || nom(a.email), tipo: a.tipo, desde: a.desde, hasta: a.hasta, estado: a.estado, motivo: a.motivo || '',
+      dias_de_trabajo: diasDeTrabajo(a.desde, a.hasta, P(a.email), S.clases),
     })),
     turnos_a_cubrir: necesidadesFuturas(h, hasta).map(n => ({
       titular: n.titular, titularNombre: nom(n.titular), fecha: n.fecha, desde: n.generico ? '' : n.desde, hasta: n.generico ? '' : n.hasta,
@@ -1246,17 +1298,19 @@ function datosAsistente() {
     reemplazos_asignados: S.reemplazos.filter(r => r.fecha >= h && r.fecha <= hasta).map(r => ({
       reemplazoId: r.id, fecha: r.fecha, desde: r.desde, hasta: r.hasta, titular: r.titular, titularNombre: r.titularNombre || nom(r.titular), cubre: nomR(r), cubreEmail: r.externo ? '' : r.reemplazo,
     })),
+    clases_sin_profesor: clasesSinProfe().map(c => `${DIAS_CORTOS[c.dia]} ${c.desde} ${c.actividad} (${c.sede})`),
+    faltas_sin_aviso_ultimos_dias: faltasSinAviso(S.personal, S.clases, S.fichajes, S.ausencias, ini, iso(sumarDias(new Date(), -1))).map(f => ({ email: f.email, nombre: f.nombre, fecha: f.fecha })),
   };
 }
 
 async function preguntarIA(texto) {
   const c = S.config || {};
   // Historial: solo texto (los datos van frescos en el último mensaje)
-  const mensajes = AS.chat.filter(m => !m.error).slice(-8).map(m => ({ role: m.rol === 'yo' ? 'user' : 'assistant', content: m.texto }));
+  const mensajes = AS.chat.filter(m => !m.error && !m.local).slice(-8).map(m => ({ role: m.rol === 'yo' ? 'user' : 'assistant', content: m.texto }));
   mensajes.push({ role: 'user', content: `DATOS (actualizados ahora):\n${JSON.stringify(datosAsistente())}\n\nPREGUNTA: ${texto}` });
   if (DEMO) {
     if (window.__asistentePrueba) return window.__asistentePrueba(texto, datosAsistente());
-    return { respuesta: 'En la demo el asistente no está conectado a la IA. En la app real responde con los datos del club.', acciones: [] };
+    return { respuesta: 'En la demo el asistente no está conectado a la IA. En la app real responde con los datos del club. Igual podés usar los botones de "Para resolver hoy".', acciones: [] };
   }
   if (!c.correoScriptUrl) throw new Error('Falta conectar el script de Google en Ajustes.');
   const r = await fetch(c.correoScriptUrl, {
@@ -1274,77 +1328,130 @@ async function preguntarIA(texto) {
 }
 
 async function ejecutarAccion(x) {
-  if (x.tipo === 'aprobar' || x.tipo === 'rechazar') {
-    const a = S.ausencias.find(a => a.id === x.ausenciaId);
-    if (!a) return toast('No encontré ese pedido', true);
-    return responder(a, x.tipo === 'aprobar');
-  }
-  if (x.tipo === 'quitar_reemplazo') {
-    const r = S.reemplazos.find(r => r.id === x.reemplazoId);
-    if (!r) return toast('Ese reemplazo ya no está', true);
-    if (!(await confirmar(`¿Sacar a <b>${esc(nomR(r))}</b> del ${fechaCorta(r.fecha)} (${r.desde}–${r.hasta})?`, { si: 'Sacar', peligro: true }))) return;
-    await borrar('reemplazos', r.id); return toast('Reemplazo quitado');
-  }
-  if (x.tipo === 'asignar') {
-    // El turno tiene que existir y el horario tiene que caer dentro (y no pisar a otro que ya cubre)
-    const n = necesidadesFuturas(x.fecha, x.fecha).find(n => n.titular === x.titular && (n.generico || (min(x.desde) >= min(n.desde) && min(x.hasta) <= min(n.hasta))));
-    if (!n) return toast('Ese turno ya no figura para cubrir', true);
-    const desde = x.desde || n.desde, hasta = x.hasta || n.hasta;
-    const choca = reemplazosDe(n, S.reemplazos).find(r => seSolapan(r.desde, r.hasta, desde, hasta));
-    if (choca) return toast(`Esa parte ya la cubre ${nomR(choca)} (${choca.desde}–${choca.hasta})`, true);
-    const q = x.reemplazo && P(x.reemplazo);
-    const nombre = q ? nombreCompleto(q) : x.reemplazoNombre;
-    if (!nombre) return toast('Falta saber quién cubre', true);
-    if (!(await confirmar(`<b>${esc(nombre)}</b> cubre a <b>${esc(nom(n.titular))}</b> el ${fechaLarga(n.fecha)} de <b>${desde}</b> a <b>${hasta}</b>.`, { si: 'Asignar' }))) return;
-    const quien = q ? { reemplazo: q.email, reemplazoNombre: nombre }
-      : { reemplazo: 'externo:' + nombre.toLowerCase().replace(/\s+/g, '-'), reemplazoNombre: nombre, reemplazoTel: '', externo: true };
-    try { await agregar('reemplazos', docReemplazo(n, quien, desde, hasta)); } catch { return toast('No se pudo asignar', true); }
-    return toast(`${nombre.split(' ')[0]} cubre de ${desde} a ${hasta}`);
+  const persona = () => { const p = P(x.email); if (!p) toast('No encontré a esa persona', true); return p; };
+  switch (x.tipo) {
+    case 'ir': if (NOMBRE_TAB[x.tab]) { if (innerWidth < 900) cerrarAsistente(); irA(x.tab); } return;
+    case 'ver_ficha': { const p = persona(); if (p) verFicha(p); return; }
+    case 'ver_dia': if (x.fecha) verDia(x.fecha); return;
+    case 'ver_pedido': { const a = S.ausencias.find(a => a.id === x.ausenciaId); return a ? verAusencia(a) : toast('No encontré ese pedido', true); }
+    case 'aprobar': case 'rechazar': {
+      const a = S.ausencias.find(a => a.id === x.ausenciaId);
+      if (!a) return toast('No encontré ese pedido', true);
+      return responder(a, x.tipo === 'aprobar');
+    }
+    case 'aprobar_ficha': {
+      const p = persona(); if (!p) return;
+      if (await confirmar(`¿Aprobar la ficha de <b>${esc(nombreCompleto(p))}</b>? Sus clases pasan a la grilla.`, { si: 'Aprobar' })) aprobarFicha(p);
+      return;
+    }
+    case 'habilitar_celular': { const p = persona(); if (p) habilitarCelular(p); return; }
+    case 'cargar_ausencia': return cargarAusencia(x.email, { tipo: x.tipoAusencia, desde: x.fecha, hasta: x.hasta, motivo: x.motivo });
+    case 'fichaje_manual': return fichajeManual({ email: x.email, fecha: x.fecha, hora: x.desde, tipo: x.tipoFichaje });
+    case 'justificar_falta': {
+      const p = persona(); if (!p || !x.fecha) return;
+      if (!(await confirmar(`¿Justificar la falta de <b>${esc(nombreCompleto(p))}</b> del ${fechaLarga(x.fecha)}? Queda como ausencia avisada.`, { si: 'Justificar' }))) return;
+      await agregar('ausencias', { email: p.email, nombre: nombreCompleto(p), tipo: 'ausencia', desde: x.fecha, hasta: x.fecha, motivo: 'Justificada por gerencia', estado: 'aprobada', creado: AHORA, respondida: AHORA, respondidaPor: S.user.email, cargadaPorGerencia: true });
+      pintarAsistente(); return toast('Falta justificada');
+    }
+    case 'mensaje_censo': return copiar(msjCenso(''));
+    case 'quitar_reemplazo': {
+      const r = S.reemplazos.find(r => r.id === x.reemplazoId);
+      if (!r) return toast('Ese reemplazo ya no está', true);
+      if (!(await confirmar(`¿Sacar a <b>${esc(nomR(r))}</b> del ${fechaCorta(r.fecha)} (${r.desde}–${r.hasta})?`, { si: 'Sacar', peligro: true }))) return;
+      await borrar('reemplazos', r.id); return toast('Reemplazo quitado');
+    }
+    case 'asignar': {
+      // El turno tiene que existir y el horario tiene que caer dentro (y no pisar a otro que ya cubre)
+      const n = necesidadesFuturas(x.fecha, x.fecha).find(n => n.titular === x.titular && (n.generico || !x.desde || (min(x.desde) >= min(n.desde) && min(x.hasta) <= min(n.hasta))));
+      if (!n) return toast('Ese turno ya no figura para cubrir', true);
+      const desde = x.desde || n.desde, hasta = x.hasta || n.hasta;
+      const choca = reemplazosDe(n, S.reemplazos).find(r => seSolapan(r.desde, r.hasta, desde, hasta));
+      if (choca) return toast(`Esa parte ya la cubre ${nomR(choca)} (${choca.desde}–${choca.hasta})`, true);
+      const q = x.reemplazo && P(x.reemplazo);
+      const nombre = q ? nombreCompleto(q) : x.reemplazoNombre;
+      if (!nombre) return toast('Falta saber quién cubre', true);
+      if (!(await confirmar(`<b>${esc(nombre)}</b> cubre a <b>${esc(nom(n.titular))}</b> el ${fechaLarga(n.fecha)} de <b>${desde}</b> a <b>${hasta}</b>.`, { si: 'Asignar' }))) return;
+      const quien = q ? { reemplazo: q.email, reemplazoNombre: nombre }
+        : { reemplazo: 'externo:' + nombre.toLowerCase().replace(/\s+/g, '-'), reemplazoNombre: nombre, reemplazoTel: '', externo: true };
+      try { await agregar('reemplazos', docReemplazo(n, quien, desde, hasta)); } catch { return toast('No se pudo asignar', true); }
+      return toast(`${nombre.split(' ')[0]} cubre de ${desde} a ${hasta}`);
+    }
   }
 }
 
+const botonAccion = (x, ref) => `<button class="btn sm ${['rechazar', 'quitar_reemplazo', 'ver_ficha', 'ver_dia', 'ver_pedido'].includes(x.tipo) ? 'ghost' : ''}" data-acc="${ref}">${esc(x.etiqueta || x.tipo)}</button>`;
 function pintarAsistente() {
   const el = document.getElementById('asistente');
   if (!el) return;
   el.classList.toggle('abierto', AS.abierto);
+  const pend = paraHoy();
+  el.querySelector('.as-cuenta').textContent = pend.length || '';
+  el.querySelector('.as-cuenta').hidden = !pend.length;
   if (!AS.abierto) return;
+  AS.hoy = pend;
   const lista = el.querySelector('.as-chat');
-  lista.innerHTML = (AS.chat.length ? '' : `<p class="sub">Preguntá como le preguntarías a alguien del club. Por ejemplo, tocá una de estas:</p>`)
+  lista.innerHTML = (AS.chat.length ? '' : `<div class="as-hoy"><b>${pend.length ? 'Para resolver hoy' : 'Todo al día'}</b>
+      ${pend.length ? pend.map((it, i) => `<div class="as-item"><span>${esc(it.txt)}</span><div class="as-acc">${it.acc.map((x, j) => botonAccion(x, `h${i}:${j}`)).join('')}</div></div>`).join('')
+        : '<p class="sub">No hay pedidos, fichas ni turnos sin cubrir. Preguntame lo que necesites.</p>'}</div>
+      <p class="sub">Preguntame con tus palabras, escribiendo o con el micrófono 🎤. Por ejemplo:</p>`)
     + AS.chat.map((m, i) => m.rol === 'yo' ? `<div class="as-yo">${esc(m.texto)}</div>`
-      : `<div class="as-ia ${m.error ? 'error' : ''}">${esc(m.texto)}${(m.acciones || []).length ? `<div class="as-acc">${m.acciones.map((x, j) => `<button class="btn sm ${x.tipo === 'rechazar' || x.tipo === 'quitar_reemplazo' ? 'ghost' : ''}" data-acc="${i}:${j}">${esc(x.etiqueta || x.tipo)}</button>`).join('')}</div>` : ''}</div>`).join('')
+      : `<div class="as-ia ${m.error ? 'error' : ''}">${esc(m.texto)}${(m.acciones || []).length ? `<div class="as-acc">${m.acciones.map((x, j) => botonAccion(x, `${i}:${j}`)).join('')}</div>` : ''}</div>`).join('')
     + (AS.esperando ? '<div class="as-ia as-pensando">Pensando…</div>' : '');
   el.querySelector('.as-chips').innerHTML = PREGUNTAS.map(q => `<button class="chip" data-q="${esc(q)}">${esc(q)}</button>`).join('');
-  lista.scrollTop = lista.scrollHeight;
+  el.querySelector('.as-sub').textContent = `Estás en: ${NOMBRE_TAB[S.tab] || ''}`;
+  el.querySelector('[data-as-mic]').classList.toggle('activo', AS.escuchando);
+  lista.scrollTop = AS.chat.length ? lista.scrollHeight : 0;
 }
 
 async function enviarPregunta(texto) {
   texto = (texto || '').trim();
   if (!texto || AS.esperando) return;
   AS.chat.push({ rol: 'yo', texto }); AS.esperando = true; pintarAsistente();
-  try { const r = await preguntarIA(texto); AS.chat.push({ rol: 'ia', texto: r.respuesta || '', acciones: r.acciones || [] }); }
+  try { const r = await preguntarIA(texto); AS.chat.push({ rol: 'ia', texto: r.respuesta || '', acciones: (r.acciones || []).filter(x => TIPOS_ACCION.includes(x.tipo)) }); }
   catch (e) { AS.chat.push({ rol: 'ia', texto: e.message || 'No pude conectarme. Probá de nuevo.', error: true }); }
   AS.esperando = false; pintarAsistente();
 }
 
+// Dictado por voz (Chrome y Safari): toca el micrófono y habla
+const Reconocimiento = window.SpeechRecognition || window.webkitSpeechRecognition;
+function dictar() {
+  if (!Reconocimiento) return toast('Este navegador no permite dictar. Probá con Chrome.', true);
+  const rec = new Reconocimiento();
+  rec.lang = 'es-AR'; rec.interimResults = true;
+  const input = document.querySelector('#asistente .as-form input');
+  rec.onresult = e => { input.value = [...e.results].map(r => r[0].transcript).join(''); if (e.results[e.results.length - 1].isFinal) { enviarPregunta(input.value); input.value = ''; } };
+  rec.onend = () => { AS.escuchando = false; pintarAsistente(); };
+  rec.onerror = () => toast('No te escuché. Revisá el permiso del micrófono.', true);
+  AS.escuchando = true; pintarAsistente(); rec.start();
+}
+
+function cerrarAsistente() { AS.abierto = false; pintarAsistente(); }
+
 // El panel vive fuera de la pantalla principal, así no se borra cuando la app se redibuja
 function montarAsistente() {
-  if (document.getElementById('asistente')) return;
+  if (document.getElementById('asistente')) return pintarAsistente();
   const el = document.createElement('div');
   el.id = 'asistente';
-  el.innerHTML = `<button class="as-boton" data-as-abrir aria-label="Abrir el asistente"><span aria-hidden="true">✨</span> Preguntale al asistente</button>
+  el.innerHTML = `<button class="as-boton" data-as-abrir aria-label="Abrir el asistente"><span aria-hidden="true">✨</span> ¿Qué necesitás? <span class="as-cuenta" hidden></span></button>
     <section class="as-panel" role="dialog" aria-label="Asistente">
-      <div class="as-cab"><b>✨ Asistente</b><button class="btn sm ghost" data-as-cerrar aria-label="Cerrar">✕</button></div>
-      <div class="as-chips"></div>
+      <div class="as-cab"><div><b>✨ Asistente</b><span class="as-sub sub"></span></div><div class="acciones"><button class="btn sm ghost" data-as-nuevo>Empezar de nuevo</button><button class="btn sm ghost" data-as-cerrar aria-label="Cerrar">✕</button></div></div>
       <div class="as-chat"></div>
-      <form class="as-form"><input placeholder="Escribí tu pregunta" aria-label="Tu pregunta"><button class="btn" type="submit">Enviar</button></form>
+      <div class="as-chips"></div>
+      <form class="as-form"><button type="button" class="btn ghost as-mic" data-as-mic aria-label="Dictar con la voz">🎤</button><input placeholder="Escribí o tocá el micrófono" aria-label="Tu pregunta"><button class="btn" type="submit">Enviar</button></form>
     </section>`;
   document.body.appendChild(el);
+  if (!Reconocimiento) el.querySelector('[data-as-mic]').hidden = true;
   el.addEventListener('click', e => {
-    if (e.target.closest('[data-as-abrir]')) { AS.abierto = true; pintarAsistente(); el.querySelector('.as-form input').focus(); }
-    else if (e.target.closest('[data-as-cerrar]')) { AS.abierto = false; pintarAsistente(); }
+    if (e.target.closest('[data-as-abrir]')) { AS.abierto = true; pintarAsistente(); }
+    else if (e.target.closest('[data-as-cerrar]')) cerrarAsistente();
+    else if (e.target.closest('[data-as-nuevo]')) { AS.chat = []; pintarAsistente(); }
+    else if (e.target.closest('[data-as-mic]')) dictar();
     const q = e.target.closest('[data-q]'); if (q) enviarPregunta(q.dataset.q);
     const b = e.target.closest('[data-acc]');
-    if (b) { const [i, j] = b.dataset.acc.split(':').map(Number); ejecutarAccion(AS.chat[i].acciones[j]); }
+    if (b) {
+      const [i, j] = b.dataset.acc.replace('h', '').split(':').map(Number);
+      ejecutarAccion(b.dataset.acc.startsWith('h') ? AS.hoy[i].acc[j] : AS.chat[i].acciones[j]);
+    }
   });
   el.querySelector('.as-form').onsubmit = e => { e.preventDefault(); const i = e.target.querySelector('input'); enviarPregunta(i.value); i.value = ''; };
   pintarAsistente();

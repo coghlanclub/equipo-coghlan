@@ -331,7 +331,15 @@ td.num, th.num { text-align: right; }
 #asistente.abierto .as-boton { display: none; }
 #asistente .as-panel { display: none; }
 #asistente.abierto .as-panel { display: flex; flex-direction: column; gap: 10px; position: fixed; right: 0; top: 0; bottom: 0; width: min(420px, 100vw); z-index: 45; background: var(--surface); border-left: 1px solid var(--line); padding: 14px; box-shadow: -8px 0 30px rgba(0,0,0,.35); }
-.as-cab { display: flex; justify-content: space-between; align-items: center; font-size: 1.05rem; }
+.as-cab { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 1.05rem; }
+.as-cab > div:first-child { display: grid; }
+.as-cab .as-sub { font-size: .78rem; }
+.as-cuenta { background: var(--accent-ink); color: var(--accent); border-radius: 99px; padding: 0 7px; margin-left: 4px; font-size: .8rem; }
+.as-hoy { display: grid; gap: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.as-item { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+.as-item:first-of-type { border-top: 0; padding-top: 0; }
+.as-mic.activo { background: var(--accent); color: var(--accent-ink); }
+#asistente .as-boton { font-size: 1.05rem; padding: 14px 20px; }
 .as-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .as-chips .chip { background: var(--surface-2); border: 1px solid var(--line); color: var(--fg); border-radius: 99px; padding: 7px 11px; font: 600 .82rem var(--f-body); cursor: pointer; text-align: left; }
 .as-chat { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
