@@ -2,7 +2,7 @@
 // 1 Tus datos · 2 Tu rol · 3 Tus horarios · 4 Consentimiento · 5 Revisar y enviar
 import {
   esc, ROLES, ROL_CORTO, ROLES_TURNO, DIAS, DIAS_CORTOS, DIAS_LABORABLES, SEDES, ACTIVIDADES_BASE, HORARIO_CLUB,
-  dentroHorarioClub, min, FRANJAS, FRANJAS_HORA, fechaCorta, iso,
+  dentroHorarioClub, min, sumarMin, FRANJAS, FRANJAS_HORA, fechaCorta, iso,
 } from './logica.js';
 import { $, $$, toast } from './ui.js';
 import { htmlConsentimiento, DECLARACION, VERSION } from './consentimiento.js';
@@ -111,8 +111,8 @@ export function censoProfe(cont, { persona = {}, clases = [], email = '', barra 
         }).join('') || `<p class="vacio">Todavía no hay clases cargadas el ${DIAS[diaGrilla].toLowerCase()}.</p>`}
 
         <div class="panel" style="padding:12px;gap:10px;background:var(--bg)" id="nueva-clase">
-          <b>+ Agregar una clase que doy</b>
-          <span class="sub">Se suma a la grilla del club con tu nombre, al instante.</span>
+          <b>${marcadas.length ? '+ Agregar otra clase' : '+ Agregar una clase que doy'}</b>
+          <span class="sub"><b>Una clase por vez.</b> Si das 3 clases distintas, completás esto y tocás "Agregar clase" 3 veces. Si es la misma clase varios días al mismo horario, marcá todos esos días juntos. Se suma a la grilla con tu nombre, al instante.</span>
           <label>Actividad<input id="n-act" list="n-acts" placeholder="Ej.: Funcional, Calistenia, Muay Thai" autocomplete="off"></label>
           <datalist id="n-acts">${actividades.map(a => `<option value="${esc(a)}">`).join('')}</datalist>
           <label>Dónde<select id="n-sede">${SEDES.map(x => `<option>${x}</option>`).join('')}</select></label>
@@ -207,6 +207,8 @@ export function censoProfe(cont, { persona = {}, clases = [], email = '', barra 
       }
       const y = scrollY; render(); scrollTo(0, y);
     });
+    // Al elegir la hora de inicio, la de fin se completa sola (1 hora después)
+    $('#n-desde', cont)?.addEventListener('change', e => { if (e.target.value) $('#n-hasta', cont).value = sumarMin(e.target.value, 60); });
     $('#n-agregar', cont)?.addEventListener('click', async e => {
       const actividad = v('#n-act').replace(/\s+/g, ' '), sede = $('#n-sede', cont).value;
       const dias = $$('#n-dias input:checked', cont).map(i => +i.value);
@@ -228,7 +230,7 @@ export function censoProfe(cont, { persona = {}, clases = [], email = '', barra 
           clases = [...clases, { id, ...datos }];
           d.clases.push(id);
         }
-        toast(dias.length > 1 ? `Agregaste ${actividad} ${dias.length} días` : `Agregaste ${actividad}`);
+        toast(`${dias.length > 1 ? `Agregaste ${actividad} ${dias.length} días` : `Agregaste ${actividad}`}. Si das otra clase, cargala igual.`);
         diaGrilla = dias[0];
       } catch (err) { console.error(err); toast('No se pudo agregar la clase. Revisá la conexión.', true); }
       const y = scrollY; render(); scrollTo(0, y);
