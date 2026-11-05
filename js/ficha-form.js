@@ -229,7 +229,8 @@ export function activarFormFicha(el, p = {}) {
       if (!sinCorreo(d) && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(d.email)) faltan.push('correo (o marcá Ficha sin celular)');
       if (!d.roles.length) faltan.push('rol');
       if (faltan.length) { toast('Falta completar: ' + faltan.join(', '), true); return null; }
-      if (d.roles.includes('clases') && !d.actividades.length && d.clasesNuevas.length) d.actividades = [...new Set(d.clasesNuevas.map(c => c.actividad))];
+      // Lo que se carga como clase nueva cuenta también como actividad que sabe dar (aunque no esté en la lista)
+      if (d.roles.includes('clases') && d.clasesNuevas.length) d.actividades = [...new Set([...d.actividades, ...d.clasesNuevas.map(c => c.actividad)])];
       if (d.roles.includes('clases') && !d.actividades.length) { toast('Marcá al menos una actividad que sabés dar', true); return null; }
       return d;
     },

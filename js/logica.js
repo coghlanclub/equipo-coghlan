@@ -83,7 +83,8 @@ export const GRILLA_BASE = G.flatMap(([sede, desde, actividad, dias]) =>
     const c = { sede, dia, desde, hasta: sumarMin(desde, DURACION_CLASE), actividad, profesor: '' };
     return { id: idClase(c), ...c };
   }));
-export const ACTIVIDADES_BASE = [...new Set(G.map(g => g[2]))].sort((a, b) => a.localeCompare(b));
+// Las de la grilla oficial más otras que da el club aunque todavía no estén en la grilla
+export const ACTIVIDADES_BASE = [...new Set([...G.map(g => g[2]), 'Pilates'])].sort((a, b) => a.localeCompare(b));
 
 // ---------- Utilidades ----------
 export function pad(n) { return String(n).padStart(2, '0'); }
