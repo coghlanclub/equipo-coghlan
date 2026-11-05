@@ -3,9 +3,9 @@ import { DEMO, AHORA, alCambiarUsuario, esAdmin, salir, escuchar, escucharDoc, g
 import {
   esc, ROLES, ROL_CORTO, ROLES_TURNO, DIAS, DIAS_CORTOS, DIAS_LABORABLES, MESES, ESTADOS, SEDES, GRILLA_BASE, ACTIVIDADES_BASE,
   hoy, iso, deIso, mesDe, sumarDias, rangoTexto, diasDeTrabajo, textoDias, fechaLarga, fechaCorta, min, seSolapan, nombreCompleto, iniciales,
-  activo, agenda, necesidades, tipoReemplazo, cubierto, reemplazosDe, faltaCubrir, candidatos, huecos, conflictos, ausenteEn, jornadas, resumenAsistencia,
+  activo, agenda, bloquesAgenda, resumenSemana, necesidades, tipoReemplazo, cubierto, reemplazosDe, faltaCubrir, candidatos, huecos, conflictos, ausenteEn, jornadas, resumenAsistencia,
   horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
-  faltasSinAviso, sinCorreo, rangoFechas, normTel, HORARIO_CLUB, hhmm, FRANJAS,
+  faltasSinAviso, sinCorreo, rangoFechas, normTel, HORARIO_CLUB, hhmm, FRANJAS, enClasesDeUnaHora,
 } from './logica.js';
 import { enviarCorreo, envioAutomatico, destinos } from './correo.js';
 import { CORREO_GERENCIA } from './config.js';
@@ -84,6 +84,45 @@ const sinCubrir14 = () => necesidadesFuturas(hoy(), iso(sumarDias(new Date(), 14
 // Las clases que cargó un profe con la ficha por aprobar ya cuentan como con profe
 const clasesSinProfe = () => S.clases.filter(c => !c.profesor || P(c.profesor)?.estado === 'inactivo');
 
+// ---------- Corrección automática de la grilla ----------
+// Las clases duran 1 hora: si quedó cargada una clase de varias horas (de antes, o a mano) se parte sola
+// en clases de 1 hora, y si una persona tiene la misma clase repetida a la misma hora se deja una sola.
+let corrigiendo = false;
+async function corregirGrilla() {
+  if (corrigiendo || !S.listo) return; // Gerencia solo abre para cuentas de gerencia
+  const largas = S.clases.filter(c => c.desde && c.hasta && min(c.hasta) - min(c.desde) > DURACION_CLASE);
+  const vistas = new Map(), repetidas = [];
+  for (const c of [...S.clases].filter(c => !largas.includes(c)).sort((a, b) => (a.profesor ? 0 : 1) - (b.profesor ? 0 : 1) || a.id.localeCompare(b.id))) {
+    const k = [c.sede, c.dia, c.desde, sinTildes(c.actividad)].join('|');
+    if (vistas.has(k) && (!c.profesor || c.profesor === vistas.get(k).profesor)) repetidas.push(c); else if (!vistas.has(k)) vistas.set(k, c);
+  }
+  if (!largas.length && !repetidas.length) return;
+  corrigiendo = true;
+  const ops = [], reemplazo = {};
+  for (const c of largas) {
+    const { id, ...datos } = c;
+    reemplazo[id] = [];
+    for (const [desde, hasta] of enClasesDeUnaHora(c.desde, c.hasta)) {
+      const nid = idClase({ ...datos, desde });
+      reemplazo[id].push(nid);
+      if (!S.clases.some(x => x.id === nid)) ops.push({ c: 'clases', id: nid, data: { ...datos, desde, hasta } });
+    }
+    ops.push({ c: 'clases', id, borrar: true });
+  }
+  for (const c of repetidas) { reemplazo[c.id] = [vistas.get([c.sede, c.dia, c.desde, sinTildes(c.actividad)].join('|')).id]; ops.push({ c: 'clases', id: c.id, borrar: true }); }
+  // Las fichas que tenían esas clases quedan con las nuevas
+  for (const p of S.personal) {
+    const dec = p.clasesDeclaradas || [];
+    if (!dec.some(id => reemplazo[id])) continue;
+    ops.push({ c: 'personal', id: p.email, data: { clasesDeclaradas: [...new Set(dec.flatMap(id => reemplazo[id] || [id]))] }, merge: true });
+  }
+  try {
+    await lote(ops);
+    toast(`Ordené la grilla: ${largas.length ? `${largas.length} clase(s) largas pasaron a clases de 1 hora` : ''}${largas.length && repetidas.length ? ' y ' : ''}${repetidas.length ? `${repetidas.length} repetida(s) borrada(s)` : ''}.`);
+  } catch (e) { console.error('No se pudo ordenar la grilla', e); }
+  corrigiendo = false;
+}
+
 // ---------- Render ----------
 let raf = 0;
 function pintar() { cancelAnimationFrame(raf); raf = requestAnimationFrame(render); }
@@ -99,6 +138,7 @@ function render() {
   $('#salir').onclick = () => salir();
   $$('[data-tab]').forEach(b => b.onclick = () => irA(b.dataset.tab));
   montarAsistente();
+  corregirGrilla();
   ({ hoy: vHoy, censo: vCenso, personal: vPersonal, grilla: vGrilla, vacaciones: vVacaciones, reemplazos: vReemplazos, asistencia: vAsistencia, ajustes: vAjustes })[S.tab]($('#vista'));
   scrollTo(0, y);
 }
@@ -275,7 +315,7 @@ function vPersonal(v) {
     <div class="grid-3">${lista.map(p => `<button class="tarjeta" data-ficha="${esc(p.email)}" ${activo(p) ? '' : 'style="opacity:.55"'}>
         <div class="persona"><div class="avatar">${esc(iniciales(p))}</div><div><b>${esc(nombreCompleto(p))}</b><span class="sub mono">${esc(p.telefono || '')}</span></div></div>
         <div class="pie">${chipsRoles(p)} ${!activo(p) ? '<span class="pill neutro">Inactivo</span>' : ''} ${conflictos(p, S.clases).length ? '<span class="pill pendiente">Choque de horarios</span>' : ''}</div>
-        <span class="sub">${agenda(p, S.clases).length} turnos/clases por semana${(p.actividades || []).length ? ' · ' + esc(p.actividades.slice(0, 3).join(', ')) + (p.actividades.length > 3 ? '…' : '') : ''}</span>
+        <span class="sub">${resumenSemana(agenda(p, S.clases))}${(p.actividades || []).length ? ' · ' + esc(p.actividades.slice(0, 3).join(', ')) + (p.actividades.length > 3 ? '…' : '') : ''}</span>
       </button>`).join('') || '<p class="vacio">No hay personas con ese filtro.</p>'}</div>`;
   $('#copiar-censo').onclick = () => copiar(linkCenso);
   $('#nueva').onclick = () => editarFicha({ estado: 'activo' });
@@ -1660,7 +1700,7 @@ function responderLocal(texto) {
   if (quien) {
     const ag = agenda(quien, S.clases);
     const prox = S.ausencias.filter(a => a.email === quien.email && a.estado !== 'rechazada' && a.hasta >= hoy());
-    return R(`${nombreCompleto(quien)} · ${(quien.roles || []).map(r => ROL_CORTO[r]).join(', ') || 'sin rol'} · ${ag.length} turno(s)/clase(s) por semana${prox.length ? ` · ${prox[0].tipo} ${rangoTexto(prox[0].desde, prox[0].hasta)}` : ''}.`,
+    return R(`${nombreCompleto(quien)} · ${(quien.roles || []).map(r => ROL_CORTO[r]).join(', ') || 'sin rol'} · ${resumenSemana(ag)}${prox.length ? ` · ${prox[0].tipo} ${rangoTexto(prox[0].desde, prox[0].hasta)}` : ''}.`,
       [accion('ver_ficha', `Ver ficha de ${pila(quien)}`, { email: quien.email }), quien.telefono ? accion('whatsapp', `WhatsApp a ${pila(quien)}`, { email: quien.email }) : null]);
   }
   if (/^(hola|buen|gracias|ok|dale|genial)/.test(n)) return R('¡Hola! Preguntame lo que necesites o tocá una de las preguntas de abajo.');

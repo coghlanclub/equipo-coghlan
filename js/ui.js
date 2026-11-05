@@ -1,6 +1,6 @@
 // Piezas de interfaz compartidas.
 import { DEMO, entrar, demoReiniciar, demoSembrado, demoSembrar } from './datos.js';
-import { esc, ROLES, ROL_CORTO, DIAS, DIAS_LABORABLES, nombreCompleto, iniciales, waLink, horasSemanales, agenda, sinCorreo, tokenAleatorio, FRANJAS, DIAS_CORTOS, fechaCorta } from './logica.js';
+import { esc, ROLES, ROL_CORTO, DIAS, DIAS_LABORABLES, nombreCompleto, iniciales, waLink, horasSemanales, agenda, bloquesAgenda, sinCorreo, tokenAleatorio, FRANJAS, DIAS_CORTOS, fechaCorta } from './logica.js';
 
 export const $ = (s, el = document) => el.querySelector(s);
 export const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -107,11 +107,13 @@ export function idDispositivo() {
 export function chipsRoles(p) { return (p.roles || []).map(r => `<span class="rol rol-${r}">${ROL_CORTO[r]}</span>`).join(' '); }
 
 export function htmlAgenda(slots) {
+  // Las clases seguidas de la misma actividad se ven como un solo bloque, con la cantidad de clases
+  const bs = bloquesAgenda(slots);
   const filas = DIAS_LABORABLES.map(d => {
-    const ss = slots.filter(s => s.dia === d);
+    const ss = bs.filter(s => s.dia === d);
     if (!ss.length) return '';
     return `<div class="fila-dia"><b>${DIAS[d]}</b><div class="slots">${ss.map(s =>
-      `<span class="slot-mini rol-${s.rol}"><span class="mono">${s.desde}–${s.hasta}</span> ${esc(s.actividad || ROL_CORTO[s.rol])}${s.sede ? ' · ' + esc(s.sede) : ''}</span>`).join('')}</div></div>`;
+      `<span class="slot-mini rol-${s.rol}"><span class="mono">${s.desde}–${s.hasta}</span> ${esc(s.que)}${s.sede ? ' · ' + esc(s.sede) : ''}${s.clase && s.n > 1 ? ` · ${s.n} clases` : ''}</span>`).join('')}</div></div>`;
   }).join('');
   return filas ? `<div class="semana">${filas}</div>` : '<p class="vacio">Sin horarios cargados.</p>';
 }

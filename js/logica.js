@@ -159,6 +159,21 @@ export function textoDias(desde, hasta, p, clases = []) {
   const n = diasDeTrabajo(desde, hasta, p, clases), c = diasEntre(desde, hasta);
   return `${n} ${n === 1 ? 'día' : 'días'} de trabajo${n !== c ? ` (${c} corridos)` : ''}`;
 }
+// Para leer fácil: junta las clases seguidas de la misma actividad en un bloque ("Lun 08–12 Pilates · 4 clases")
+export function bloquesAgenda(ag) {
+  const out = [];
+  for (const s of [...ag].sort((a, b) => a.dia - b.dia || a.desde.localeCompare(b.desde))) {
+    const que = s.actividad || ROL_CORTO[s.rol], prev = out[out.length - 1];
+    if (prev && prev.dia === s.dia && prev.que === que && prev.sede === (s.sede || '') && prev.hasta === s.desde) { prev.hasta = s.hasta; prev.n++; }
+    else out.push({ dia: s.dia, desde: s.desde, hasta: s.hasta, que, rol: s.rol, sede: s.sede || '', n: 1, clase: s.tipo === 'clase' });
+  }
+  return out;
+}
+// "4 clases y 2 turnos por semana"
+export function resumenSemana(ag) {
+  const c = ag.filter(s => s.tipo === 'clase').length, t = ag.length - c;
+  return [c ? `${c} clase${c > 1 ? 's' : ''}` : '', t ? `${t} turno${t > 1 ? 's' : ''}` : ''].filter(Boolean).join(' y ') + (ag.length ? ' por semana' : 'Sin horarios');
+}
 export function horasSemanales(p, clases) { return agenda(p, clases).reduce((t, s) => t + (min(s.hasta) - min(s.desde)), 0) / 60; }
 
 export function ausenteEn(email, fecha, ausencias) {
