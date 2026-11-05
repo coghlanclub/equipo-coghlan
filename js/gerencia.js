@@ -1248,7 +1248,7 @@ Para buscar quién puede cubrir: mismo rol (y misma actividad si es una clase), 
 No inventes emails ni ids: copialos de los datos.`;
 
 const CAMPOS_ACCION = ['tipo', 'etiqueta', 'tab', 'email', 'fecha', 'desde', 'hasta', 'ausenciaId', 'reemplazoId', 'titular', 'reemplazo', 'reemplazoNombre', 'tipoAusencia', 'tipoFichaje', 'motivo'];
-const TIPOS_ACCION = ['ir', 'ver_ficha', 'ver_dia', 'ver_pedido', 'asignar', 'quitar_reemplazo', 'aprobar', 'rechazar', 'aprobar_ficha', 'habilitar_celular', 'cargar_ausencia', 'justificar_falta', 'fichaje_manual', 'mensaje_censo'];
+const TIPOS_ACCION = ['todas', 'whatsapp', 'ir', 'ver_ficha', 'ver_dia', 'ver_pedido', 'asignar', 'quitar_reemplazo', 'aprobar', 'rechazar', 'aprobar_ficha', 'habilitar_celular', 'cargar_ausencia', 'justificar_falta', 'fichaje_manual', 'mensaje_censo'];
 const ESQUEMA_ASISTENTE = {
   type: 'object', additionalProperties: false, required: ['respuesta', 'acciones'],
   properties: {
@@ -1329,31 +1329,97 @@ const AYUDA_TAB = {
   ajustes: 'Acá se configuran los correos, el WhatsApp de recepción y la cuenta de la PC de recepción.',
 };
 
-// Busca a una persona nombrada en el texto (nombre, apellido o los dos)
-function personaEn(t) {
-  const n = sinTildes(t);
-  const cand = S.personal.filter(p => p.estado !== 'inactivo').map(p => {
-    const nom = sinTildes(p.nombre), ape = sinTildes(p.apellido);
-    const pts = (nom && new RegExp(`\\b${nom}\\b`).test(n) ? 2 : 0) + (ape && new RegExp(`\\b${ape}\\b`).test(n) ? 2 : 0);
-    return { p, pts };
-  }).filter(x => x.pts).sort((a, b) => b.pts - a.pts);
-  return cand[0]?.p || null;
+// Palabras del texto, sin tildes ni signos
+const palabras = t => sinTildes(t).replace(/[^a-z0-9ñ:/ ]/g, ' ').split(/\s+/).filter(Boolean);
+// Distancia entre dos palabras (cuántas letras cambian): sirve para entender errores de tipeo
+function lev(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
 }
-// Fecha de la que se habla: hoy, mañana, pasado mañana, un día de la semana o 12/11
+// ¿Aparece alguna de estas raíces? Tolera errores ("vacaiones" = vacaciones, "reemplaxo" = reemplazo)
+function dice(ws, raices) {
+  return raices.some(k => ws.some(w => {
+    if (w.startsWith(k)) return true;
+    const tol = k.length >= 7 ? 2 : k.length >= 4 ? 1 : 0;
+    return tol && w.length >= k.length - 1 && lev(w.slice(0, k.length), k) <= tol;
+  }));
+}
+
+// Personas nombradas en el texto, en el orden en que aparecen (tolera tildes y errores de tipeo)
+function personasEn(t) {
+  const ws = palabras(t);
+  const igual = (w, x) => x && (w === x || (x.length >= 4 && w.length >= 4 && lev(w, x) <= 1));
+  const out = [];
+  for (const p of S.personal.filter(p => p.estado !== 'inactivo')) {
+    const nom = sinTildes(p.nombre).split(' ')[0], ape = sinTildes(p.apellido).split(' ')[0];
+    let pos = -1, pts = 0;
+    // exacto vale más que parecido (así "Rosa" no se confunde con "Sosa")
+    ws.forEach((w, i) => { for (const x of [nom, ape]) if (igual(w, x)) { pts += w === x ? 3 : 1; if (pos < 0) pos = i; } });
+    if (pts) out.push({ p, pos, pts });
+  }
+  // Si dos se llaman igual, gana el que coincide en nombre y apellido
+  const mejor = {};
+  for (const x of out) if (!mejor[x.pos] || x.pts > mejor[x.pos].pts) mejor[x.pos] = x;
+  return Object.values(mejor).sort((a, b) => a.pos - b.pos).map(x => x.p);
+}
+const personaEn = t => personasEn(t)[0] || null;
+
+const DIAS_TXT = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
+// "12/11" o "12" (del mes, o del próximo si ya pasó)
+function fechaNum(dd, mm) {
+  const h = new Date();
+  let y = h.getFullYear(), m = mm ? +mm : h.getMonth() + 1;
+  if (!mm && +dd < h.getDate() - 7) m++;
+  if (m > 12) { m = 1; y++; }
+  if (mm && m < h.getMonth() + 1 - 2) y++;
+  return `${y}-${pad(m)}-${pad(+dd)}`;
+}
+// Fecha de la que se habla: hoy, mañana, ayer, un día de la semana, 12/11 o "el 12"
 function fechaEn(t) {
   const n = sinTildes(t), h = new Date();
   if (/pasado manana/.test(n)) return iso(sumarDias(h, 2));
   if (/\bayer\b/.test(n)) return iso(sumarDias(h, -1));
-  if (/\bmanana\b/.test(n.replace(/(a|por|de) la manana/g, ''))) return iso(sumarDias(h, 1));
+  if (/\bmanana\b/.test(n.replace(/(a|por|de|en) la manana/g, ''))) return iso(sumarDias(h, 1));
   const m = n.match(/\b(\d{1,2})\/(\d{1,2})\b/);
-  if (m) return `${h.getFullYear()}-${pad(+m[2])}-${pad(+m[1])}`;
-  const dias = ['domingo', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado'];
-  const i = dias.findIndex(d => n.includes(d));
-  if (i >= 0) { const dif = (i - h.getDay() + 7) % 7; return iso(sumarDias(h, dif)); }
+  if (m) return fechaNum(m[1], m[2]);
+  const i = DIAS_TXT.findIndex(d => n.includes(d));
+  if (i >= 0) { const dif = (i - h.getDay() + 7) % 7; return iso(sumarDias(h, /proximo|que viene/.test(n) && dif === 0 ? 7 : dif)); }
+  const el = n.match(/\bel (\d{1,2})\b(?!\s*(:|hs|h\b|horas))/);
+  if (el) return fechaNum(el[1]);
   if (/\bhoy\b/.test(n)) return hoy();
   return null;
 }
-const franjaEn = t => { const n = sinTildes(t); return /(a|por|de) la manana/.test(n) ? 'm' : /tarde/.test(n) ? 't' : /noche/.test(n) ? 'n' : null; };
+// "del 10 al 20", "del 10/12 al 20/12", "desde el lunes hasta el viernes"
+function rangoEn(t) {
+  const n = sinTildes(t);
+  const m = n.match(/del? (\d{1,2})(?:\/(\d{1,2}))? (?:al|hasta el|hasta) (\d{1,2})(?:\/(\d{1,2}))?/);
+  if (m) { const d = fechaNum(m[1], m[2] || m[4]); let h = fechaNum(m[3], m[4] || m[2]); if (h < d) h = fechaNum(m[3], m[4] || String(+d.slice(5, 7) + 1)); return [d, h]; }
+  const dd = n.match(/(?:desde el|del) (lunes|martes|miercoles|jueves|viernes|sabado|domingo) (?:hasta el|al) (lunes|martes|miercoles|jueves|viernes|sabado|domingo)/);
+  if (dd) { const a = fechaEn(dd[1]), b = fechaEn(dd[2]); return [a, b < a ? iso(sumarDias(deIso(b), 7)) : b]; }
+  const f = fechaEn(t); return f ? [f, f] : null;
+}
+// "de 11 a 12", "11 a 12hs", "de 13:30 a 17", "a las 11"
+function horasEn(t) {
+  const n = sinTildes(t).replace(/(\d)\s*hs?\b/g, '$1').replace(/(\d) horas/g, '$1');
+  const hh = (h, m) => `${pad(+h)}:${pad(+(m || 0))}`;
+  const r = n.match(/(?:de |desde (?:las )?)?(\d{1,2})(?::(\d{2}))? (?:a|hasta|-) (?:las )?(\d{1,2})(?::(\d{2}))?/);
+  if (r && +r[1] <= 23 && +r[3] <= 23 && +r[3] > +r[1]) return [hh(r[1], r[2]), hh(r[3], r[4])];
+  const u = n.match(/a las (\d{1,2})(?::(\d{2}))?/);
+  return u ? [hh(u[1], u[2]), null] : null;
+}
+function fechasEn(t) {
+  const n = sinTildes(t).replace(/(\d)\s*hs?\b/g, '$1');
+  const out = new Set();
+  for (const m of n.matchAll(/\b(\d{1,2})\/(\d{1,2})\b/g)) out.add(fechaNum(m[1], m[2]));
+  for (const m of n.matchAll(/\b(?:el|dia|y|los|del)\s+(?:dia\s+)?(\d{1,2})\b(?!\s*(?::|\/|a \d|hasta|al \d))/g)) if (+m[1] >= 1 && +m[1] <= 31) out.add(fechaNum(m[1]));
+  DIAS_TXT.forEach((d, i) => { if (new RegExp(`\\b${d}\\b`).test(n)) { const h = new Date(); out.add(iso(sumarDias(h, (i - h.getDay() + 7) % 7))); } });
+  if (!out.size) { const f = fechaEn(t); if (f) out.add(f); }
+  return [...out].sort();
+}
+const franjaEn = t => { const n = sinTildes(t); return /(a|por|de|en) la manana/.test(n) ? 'm' : /tarde/.test(n) ? 't' : /noche/.test(n) ? 'n' : null; };
 
 // Quién está libre una fecha (y franja): no está de vacaciones y no tiene turno, clase ni reemplazo que se superponga
 function libresEn(f, fr) {
@@ -1374,87 +1440,231 @@ function propuestaCubrir(n) {
   return { txt, acc: c ? accion('asignar', `${c.p.nombre} cubre el ${fechaCorta(n.fecha).slice(0, 5)}${n.generico ? '' : ' ' + d}`, { titular: n.titular, fecha: n.fecha, desde: n.generico ? '' : d, hasta: n.generico ? '' : h, reemplazo: c.p.email }) : null };
 }
 
+// Actividades que se mencionan ("¿quién da zumba?")
+function actividadEn(t) {
+  const n = sinTildes(t);
+  const todas = [...new Set([...ACTIVIDADES_BASE, ...S.clases.map(c => c.actividad)])].sort((a, b) => b.length - a.length);
+  return todas.find(a => n.includes(sinTildes(a))) || todas.find(a => palabras(a).every(w => w.length < 4 || palabras(t).some(x => x.length >= 4 && lev(x, w) <= 1))) || null;
+}
+
 function responderLocal(texto) {
-  const n = sinTildes(texto);
-  const quien = personaEn(texto), f = fechaEn(texto), fr = franjaEn(texto);
+  const n = sinTildes(texto), ws = palabras(texto);
+  const ps = personasEn(texto), quien = ps[0] || null, f = fechaEn(texto), fr = franjaEn(texto), hs = horasEn(texto), fs = fechasEn(texto);
+  // Si hay más de una acción, un botón extra las hace todas juntas (con una sola confirmación)
+  const conTodas = acc => acc.length > 1 ? [...acc.slice(0, 3), { ...accion('todas', `Hacer las ${acc.length}`), sub: acc }] : acc;
   const listar = (xs, max = 5) => xs.slice(0, max).join(' · ') + (xs.length > max ? ` y ${xs.length - max} más` : '');
+  const pila = p => (p?.nombre || '').split(' ')[0];
+  const R = (respuesta, acciones = []) => ({ respuesta, acciones: acciones.filter(Boolean).slice(0, 4) });
+  // Rol del que se habla (para "la sala queda libre", "recepción sin nadie")
+  const rolTxt = dice(ws, ['sala', 'muscul']) ? 'musculacion' : dice(ws, ['recep']) ? 'recepcion' : dice(ws, ['limpi']) ? 'limpieza' : null;
 
-  // Cómo se usa la pantalla
-  if (/como (se usa|uso|hago|funciona)|que hago aca|ayuda|esta pantalla/.test(n)) {
-    return { respuesta: `Estás en ${NOMBRE_TAB[S.tab]}. ${AYUDA_TAB[S.tab] || ''}`, acciones: [] };
+  // ----- Soluciones que dicta gerencia -----
+  // "La sala queda libre de 11 a 12 el 10 y el 12": ese hueco se deja sin cubrir a propósito (deja de figurar como pendiente)
+  if (!/quien/.test(n) && !(/clases? sin profe/.test(n) && !hs) && (/sin profe|sin nadie|nadie la cubre|no se cubre|no hace falta|se cierra|cerrad/.test(n) || (dice(ws, ['queda', 'deja', 'dejar', 'dejala', 'dejalo']) && dice(ws, ['libre', 'disponib', 'vacia', 'sin cubrir', 'abierta'])))) {
+    const dias = fs.length ? fs : [hoy()];
+    const nec = dias.flatMap(d => necesidadesFuturas(d, d)).filter(x => faltaCubrir(x, S.reemplazos).length
+      && (!rolTxt || x.rol === rolTxt) && (!quien || x.titular === quien.email)
+      && (!hs || x.generico || (min(hs[0]) < min(x.hasta) && min(hs[1] || x.hasta) > min(x.desde))));
+    if (!nec.length) return R(`No encontré turnos sin cubrir${rolTxt ? ' de ' + ROL_CORTO[rolTxt].toLowerCase() : ''} ${dias.map(d => fechaCorta(d).slice(0, 5)).join(' y ')}${hs ? ` de ${hs[0]} a ${hs[1] || ''}` : ''}.`);
+    const acc = nec.map(x => {
+      const [d, h] = hs ? [x.generico ? hs[0] : (min(hs[0]) > min(x.desde) ? hs[0] : x.desde), x.generico ? (hs[1] || x.hasta) : (min(hs[1] || x.hasta) < min(x.hasta) ? hs[1] : x.hasta)] : faltaCubrir(x, S.reemplazos)[0];
+      return accion('asignar', `Libre ${fechaCorta(x.fecha).slice(0, 5)} ${d}–${h}`, { titular: x.titular, fecha: x.fecha, desde: d, hasta: h, reemplazoNombre: 'Queda libre (sin profe)' });
+    });
+    return R(`Entendido: ${acc.length === 1 ? 'ese horario queda' : 'esos horarios quedan'} sin profe a propósito y ya no figuran como pendientes. Tocá para confirmar.`, conTodas(acc));
   }
-  // Ir a una pantalla
-  const tabNombrada = Object.keys(NOMBRE_TAB).find(k => n.includes(sinTildes(NOMBRE_TAB[k]).split(' ')[0]) && /(ir|llevame|abri|mostrame|ver) /.test(n));
-  if (tabNombrada) return { respuesta: `Te llevo a ${NOMBRE_TAB[tabNombrada]}.`, acciones: [accion('ir', `Ir a ${NOMBRE_TAB[tabNombrada]}`, { tab: tabNombrada })] };
 
-  // Avisó que falta (cargar ausencia)
-  if (quien && /(avis|no viene|no va a venir|falta el|faltar|enferm|medico)/.test(n) && f) {
-    return { respuesta: `Te abro la ausencia de ${quien.nombre} del ${fechaLarga(f)} para que la confirmes.`,
-      acciones: [accion('cargar_ausencia', `Cargar ausencia de ${quien.nombre}`, { email: quien.email, tipoAusencia: /vacacion/.test(n) ? 'vacaciones' : 'ausencia', fecha: f, hasta: f, motivo: /medico/.test(n) ? 'Médico' : /enferm/.test(n) ? 'Enfermedad' : '' })] };
+  // ----- Ayuda -----
+  if (/como (se usa|uso|hago|funciona)|que hago aca|que es esto|esta pantalla|^ayuda/.test(n))
+    return R(`Estás en ${NOMBRE_TAB[S.tab]}. ${AYUDA_TAB[S.tab] || ''} Si querés, preguntame directamente lo que necesitás.`);
+  if (/que (podes|sabes) hacer|que te puedo (pedir|preguntar)/.test(n))
+    return R('Puedo decirte qué falta cubrir, quién está libre, quién cubre a quién, horarios, teléfonos y PIN. Y hacer cosas: asignar reemplazos, aprobar o cargar vacaciones, ausencias y fichajes. Por ejemplo: "que Diego cubra a Roberto el martes de 11 a 12".');
+
+  // ----- Órdenes -----
+  // Asignar un reemplazo: "que Diego cubra a Roberto el martes de 11 a 12", "Diego reemplaza a Roberto el 10"
+  // Quien cubre puede no estar en el sistema: "que Cris cubra a Roberto el 10 de 13 a 17"
+  const externo = ps.length === 1 && dice(ws, ['cubr', 'reempl']) ? (sinTildes(texto).match(/(?:que |pone(?:le)? a |asigna(?:le)? a )?\b([a-zñ]{3,})\b (?:cubra|cubre|reemplace|reemplaza|va a cubrir)/) || [])[1] : null;
+  if (externo && !['que', 'quien', 'nadie', 'alguien', 'el', 'la'].includes(externo) && !personasEn(externo).length) {
+    const titular = ps[0];
+    const nec = (fs.length ? fs.flatMap(d => necesidadesFuturas(d, d)) : necesidadesFuturas(hoy(), iso(sumarDias(new Date(), 35)))).filter(x => x.titular === titular.email && faltaCubrir(x, S.reemplazos).length);
+    const turnos = hs ? nec.filter(x => x.generico || (min(hs[0]) >= min(x.desde) && min(hs[1] || x.hasta) <= min(x.hasta))) : nec;
+    if (!turnos.length) return R(`No encontré turnos de ${pila(titular)} sin cubrir${hs ? ` de ${hs[0]} a ${hs[1] || ''}` : ''}.`);
+    const nombre = externo[0].toUpperCase() + externo.slice(1);
+    const acc = turnos.map(x => { const [d, h] = hs ? [hs[0], hs[1] || x.hasta] : faltaCubrir(x, S.reemplazos)[0];
+      return accion('asignar', `${nombre} cubre ${fechaCorta(x.fecha).slice(0, 5)} ${d}–${h}`, { titular: x.titular, fecha: x.fecha, desde: d, hasta: h, reemplazoNombre: nombre }); });
+    return R(`${nombre} no está en el sistema: lo anoto igual como reemplazo de ${pila(titular)}. Tocá para confirmar.`, conTodas(acc));
+  }
+  if (ps.length >= 2 && dice(ws, ['cubr', 'reempl', 'asign', 'pone', 'suplan'])) {
+    const fecha = fs.length === 1 ? fs[0] : null;
+    const nec = (fs.length > 1 ? fs.flatMap(d => necesidadesFuturas(d, d)) : necesidadesFuturas(fecha || hoy(), fecha || iso(sumarDias(new Date(), 35))));
+    // El titular es el que tiene un turno para cubrir; el otro es quien cubre
+    const titular = ps.find(p => nec.some(x => x.titular === p.email)) || ps[1];
+    const otro = ps.find(p => p !== titular);
+    const deEl = nec.filter(x => x.titular === titular.email && faltaCubrir(x, S.reemplazos).length);
+    if (!deEl.length) return R(`No encontré turnos de ${pila(titular)} sin cubrir${fecha ? ' el ' + fechaLarga(fecha) : ''}.`, [accion('ir', 'Ver reemplazos', { tab: 'reemplazos' })]);
+    const turnos = hs ? deEl.filter(x => x.generico || (min(hs[0]) >= min(x.desde) && min(hs[1] || x.hasta) <= min(x.hasta))) : deEl;
+    if (!turnos.length) return R(`Ese horario no está dentro de los turnos de ${pila(titular)}: ${listar(deEl.map(x => `${fechaCorta(x.fecha).slice(0, 5)} ${x.desde}–${x.hasta}`))}.`);
+    const acc = turnos.map(x => {
+      const [d, h] = hs ? [hs[0], hs[1] || x.hasta] : faltaCubrir(x, S.reemplazos)[0];
+      return accion('asignar', `${pila(otro)} cubre ${fechaCorta(x.fecha).slice(0, 5)} ${d}–${h}`, { titular: x.titular, fecha: x.fecha, desde: d, hasta: h, reemplazo: otro.email });
+    });
+    return R(`Listo para asignar: ${pila(otro)} cubre a ${pila(titular)}${acc.length > 1 ? ` (${acc.length} turnos)` : ''}. Tocá para confirmar.`, conTodas(acc));
+  }
+  // Aprobar / rechazar
+  if (dice(ws, ['aproba', 'acepta', 'autoriz', 'rechaz', 'denega', 'negale'])) {
+    const pend = pendientesAus().filter(a => !quien || a.email === quien.email);
+    const ok = !dice(ws, ['rechaz', 'denega', 'negale']);
+    if (/ficha|censo/.test(n)) {
+      const fichas = pendientesFicha().filter(p => !quien || p.email === quien.email);
+      return fichas.length ? R(`${fichas.length === 1 ? 'Ficha' : 'Fichas'} para aprobar: ${listar(fichas.map(nombreCompleto))}.`, fichas.map(p => accion('aprobar_ficha', `Aprobar a ${pila(p)}`, { email: p.email })))
+        : R('No hay fichas para aprobar.');
+    }
+    if (!pend.length) return R(quien ? `${pila(quien)} no tiene pedidos pendientes.` : 'No hay pedidos para responder.');
+    return R(`${pend.length === 1 ? 'Este es el pedido' : 'Estos son los pedidos'}: ${listar(pend.map(a => `${(a.nombre || nom(a.email)).split(' ')[0]} ${rangoTexto(a.desde, a.hasta)}`), 3)}.`,
+      pend.slice(0, 3).map(a => accion(ok ? 'aprobar' : 'rechazar', `${ok ? 'Aprobar' : 'Rechazar'} a ${(a.nombre || nom(a.email)).split(' ')[0]} ${fechaCorta(a.desde).slice(0, 5)}`, { ausenciaId: a.id })));
+  }
+  // Sacar un reemplazo: "sacá a Diego del reemplazo del martes"
+  if (quien && dice(ws, ['saca', 'quita', 'borra', 'elimin']) && dice(ws, ['reempl', 'cubr'])) {
+    const rs = S.reemplazos.filter(r => (r.reemplazo === quien.email || r.titular === quien.email) && r.fecha >= hoy() && (!f || r.fecha === f));
+    return rs.length ? R(`Estos son los reemplazos de ${pila(quien)}. Tocá el que querés sacar.`, rs.slice(0, 4).map(r => accion('quitar_reemplazo', `Sacar ${nomR(r).split(' ')[0]} ${fechaCorta(r.fecha).slice(0, 5)} ${r.desde}`, { reemplazoId: r.id })))
+      : R(`No encontré reemplazos de ${pila(quien)}${f ? ' el ' + fechaLarga(f) : ''}.`);
+  }
+  // Habilitar celular
+  if (quien && dice(ws, ['celular', 'telefono nuevo', 'habilit', 'cambio de cel'])) {
+    if (dice(ws, ['habilit', 'cambi', 'nuevo', 'no puede fichar', 'liber']))
+      return R(`Te dejo el botón para habilitar el celular de ${pila(quien)}.`, [accion('habilitar_celular', `Habilitar celular de ${pila(quien)}`, { email: quien.email })]);
+  }
+  // Vacaciones o ausencias que alguien avisó: "Diego avisó que el jueves no viene", "cargá vacaciones a Rosa del 10 al 20"
+  if (quien && (dice(ws, ['avis', 'enferm', 'medic', 'vacacion', 'licencia', 'falta', 'faltar', 'no viene', 'carga', 'anota']) && (/no (viene|va a venir|puede)|avis|enferm|medic|carg|anot|licencia/.test(n) || dice(ws, ['vacacion'])))
+      && !/(cubre|libre|pedido|pendiente)/.test(n)) {
+    const rg = rangoEn(texto);
+    if (rg) {
+      const vac = dice(ws, ['vacacion']);
+      return R(`Te abro ${vac ? 'las vacaciones' : 'la ausencia'} de ${pila(quien)} ${rg[0] === rg[1] ? 'del ' + fechaLarga(rg[0]) : 'del ' + rangoTexto(rg[0], rg[1])}. Revisá y tocá Guardar.`,
+        [accion('cargar_ausencia', `Cargar ${vac ? 'vacaciones' : 'ausencia'} de ${pila(quien)}`, { email: quien.email, tipoAusencia: vac ? 'vacaciones' : 'ausencia', fecha: rg[0], hasta: rg[1], motivo: /medic/.test(n) ? 'Médico' : /enferm/.test(n) ? 'Enfermedad' : '' })]);
+    }
   }
   // Se olvidó de fichar
-  if (quien && /(olvid|no fich|fichaje)/.test(n)) {
-    return { respuesta: `Te abro el fichaje manual de ${quien.nombre}${f ? ' del ' + fechaLarga(f) : ''}.`, acciones: [accion('fichaje_manual', `Fichaje manual de ${quien.nombre}`, { email: quien.email, fecha: f || hoy() })] };
+  if (quien && dice(ws, ['olvid', 'fichaj', 'fich'])) {
+    const sal = /salida|se fue|salio/.test(n);
+    return R(`Te abro el fichaje manual de ${pila(quien)}${f ? ' del ' + fechaLarga(f) : ''}.`, [accion('fichaje_manual', `Fichaje manual de ${pila(quien)}`, { email: quien.email, fecha: f || hoy(), desde: hs?.[0] || '', tipoFichaje: sal ? 'salida' : 'entrada' })]);
   }
+  // Justificar falta
+  if (quien && dice(ws, ['justific'])) {
+    return R(`Te dejo el botón para justificar la falta de ${pila(quien)}${f ? ' del ' + fechaLarga(f) : ''}.`, [accion('justificar_falta', `Justificar falta de ${pila(quien)}`, { email: quien.email, fecha: f || iso(sumarDias(new Date(), -1)) })]);
+  }
+  // Mandar mensaje / llamar
+  if (quien && dice(ws, ['telefon', 'celu', 'numero', 'llam', 'whats', 'wasap', 'mensaj', 'escrib', 'contact'])) {
+    return quien.telefono ? R(`El teléfono de ${nombreCompleto(quien)} es ${quien.telefono}.${quien.emergenciaTel ? ` Emergencia: ${quien.emergenciaNombre || ''} ${quien.emergenciaTel}.` : ''}`, [accion('whatsapp', `WhatsApp a ${pila(quien)}`, { email: quien.email }), accion('ver_ficha', 'Ver ficha', { email: quien.email })])
+      : R(`${pila(quien)} no tiene teléfono cargado.`, [accion('ver_ficha', 'Ver ficha', { email: quien.email })]);
+  }
+  // PIN
+  if (quien && /\bpin\b/.test(n)) return R(quien.sinCelular ? `El PIN de ${pila(quien)} es ${quien.pin || '(sin PIN)'}. Lo usa en la PC de recepción.` : `${pila(quien)} ficha con su celular, no tiene PIN.`, [accion('ver_ficha', 'Ver ficha', { email: quien.email })]);
+
+  // ----- Consultas -----
   // Quién está libre
-  if (/(libre|disponible|puede cubrir|quien puede)/.test(n)) {
+  if (dice(ws, ['libre', 'disponib', 'puede cubrir', 'quien puede'])) {
     const fecha = f || hoy();
-    const ls = libresEn(fecha, fr);
+    let ls = libresEn(fecha, fr);
+    const act = actividadEn(texto);
+    if (act) ls = ls.filter(x => (x.p.actividades || []).includes(act));
+    if (dice(ws, ['sala', 'muscul'])) ls = ls.filter(x => (x.p.roles || []).includes('musculacion'));
+    if (dice(ws, ['recep'])) ls = ls.filter(x => (x.p.roles || []).includes('recepcion'));
     const cuando = `${fechaLarga(fecha)}${fr ? ' a la ' + FRANJAS[fr].toLowerCase() : ''}`;
-    return { respuesta: ls.length ? `Libres el ${cuando}: ${listar(ls.map(x => `${nombreCompleto(x.p)}${x.dijo ? ' (dijo que puede)' : ''}`), 8)}.` : `El ${cuando} no encontré a nadie libre.`,
-      acciones: ls.slice(0, 3).map(x => accion('ver_ficha', `Ver ${x.p.nombre}`, { email: x.p.email })) };
+    return R(ls.length ? `Libres el ${cuando}${act ? ' que dan ' + act : ''}: ${listar(ls.map(x => `${nombreCompleto(x.p)}${x.dijo ? ' (dijo que puede)' : ''}`), 8)}.` : `El ${cuando} no encontré a nadie libre${act ? ' que dé ' + act : ''}.`,
+      ls.slice(0, 3).map(x => accion('whatsapp', `WhatsApp a ${pila(x.p)}`, { email: x.p.email })));
   }
-  // Quién cubre a alguien / qué tiene alguien
-  if (quien && /(cubre|reemplaz)/.test(n)) {
+  // Quién cubre a alguien
+  if (quien && dice(ws, ['cubr', 'reempl'])) {
     const rs = S.reemplazos.filter(r => r.titular === quien.email && r.fecha >= hoy()).sort((a, b) => a.fecha.localeCompare(b.fecha) || a.desde.localeCompare(b.desde));
     const falta = necesidadesFuturas(hoy(), iso(sumarDias(new Date(), 35))).filter(x => x.titular === quien.email && faltaCubrir(x, S.reemplazos).length);
     const props = falta.slice(0, 3).map(propuestaCubrir).filter(x => x.acc);
-    return { respuesta: `${rs.length ? `A ${quien.nombre} lo cubren: ${listar(rs.map(r => `${nomR(r).split(' ')[0]} ${fechaCorta(r.fecha).slice(0, 5)} ${r.desde}–${r.hasta}`), 6)}.` : `A ${quien.nombre} no lo cubre nadie todavía.`}${falta.length ? ` Falta cubrir ${falta.length} turno(s).` : ''}`,
-      acciones: props.map(x => x.acc).concat(falta.length > props.length ? [accion('ir', 'Ver reemplazos', { tab: 'reemplazos' })] : []).slice(0, 4) };
+    return R(`${rs.length ? `A ${pila(quien)} lo cubren: ${listar(rs.map(r => `${nomR(r).split(' ')[0]} ${fechaCorta(r.fecha).slice(0, 5)} ${r.desde}–${r.hasta}`), 6)}.` : `A ${pila(quien)} no lo cubre nadie todavía.`}${falta.length ? ` Falta cubrir ${falta.length} turno(s).` : ''}`,
+      props.map(x => x.acc).concat(falta.length > props.length ? [accion('ir', 'Ver reemplazos', { tab: 'reemplazos' })] : []));
   }
-  if (quien && /(horario|trabaja|clases|cuando viene|que dias)/.test(n)) {
+  // Quién da una actividad
+  const act = actividadEn(texto);
+  if (act && dice(ws, ['quien', 'da ', 'dan', 'profe', 'clase', 'cuando', 'horario', 'hay'])) {
+    const cs = S.clases.filter(c => c.actividad === act).sort((a, b) => a.dia - b.dia || a.desde.localeCompare(b.desde));
+    const saben = activos().filter(p => (p.actividades || []).includes(act));
+    return R(`${act}: ${cs.length ? listar(cs.map(c => `${DIAS_CORTOS[c.dia]} ${c.desde} ${c.sede} (${c.profesor ? nom(c.profesor).split(' ')[0] : 'sin profe'})`), 8) : 'no hay clases en la grilla'}.${saben.length ? ` Saben darla: ${listar(saben.map(nombreCompleto), 6)}.` : ''}`,
+      [accion('ir', 'Ver grilla', { tab: 'grilla' })]);
+  }
+  // Horario de alguien / resumen de una persona
+  if (quien && dice(ws, ['horario', 'trabaj', 'clases', 'cuando viene', 'que dias', 'turno', 'agenda'])) {
     const ag = agenda(quien, S.clases);
-    return { respuesta: ag.length ? `${quien.nombre}: ${listar(ag.map(s => `${DIAS_CORTOS[s.dia]} ${s.desde}–${s.hasta} ${s.actividad || ROL_CORTO[s.rol]}`), 8)}.` : `${quien.nombre} no tiene horarios cargados.`,
-      acciones: [accion('ver_ficha', `Ver ficha de ${quien.nombre}`, { email: quien.email })] };
+    return R(ag.length ? `${pila(quien)}: ${listar(ag.map(s => `${DIAS_CORTOS[s.dia]} ${s.desde}–${s.hasta} ${s.actividad || ROL_CORTO[s.rol]}`), 10)}.` : `${pila(quien)} no tiene horarios cargados.`,
+      [accion('ver_ficha', `Ver ficha de ${pila(quien)}`, { email: quien.email })]);
+  }
+  // Asistencia: llegadas tarde, horas, faltas
+  if (dice(ws, ['tarde', 'llego', 'llegada', 'horas', 'asisten', 'falto', 'faltas']) && !/a la tarde|por la tarde/.test(n)) {
+    const ags = Object.fromEntries(S.personal.map(p => [p.email, agenda(p, S.clases)]));
+    const res = resumenAsistencia(jornadas(S.fichajes, ags, Object.fromEntries(S.personal.map(p => [p.email, nombreCompleto(p)]))));
+    const mes = MESES[+S.mesAsis.slice(5) - 1];
+    if (quien) {
+      const r = res.find(x => x.email === quien.email);
+      return R(r ? `${pila(quien)} en ${mes}: ${r.dias} días, ${fmtMin(r.minutos)} trabajadas, ${r.tardes} llegada(s) tarde.` : `${pila(quien)} no tiene fichajes en ${mes}.`, [accion('ir', 'Ver asistencia', { tab: 'asistencia' })]);
+    }
+    const tardes = res.filter(x => x.tardes).sort((a, b) => b.tardes - a.tardes);
+    return R(tardes.length ? `Llegadas tarde en ${mes}: ${listar(tardes.map(x => `${x.nombre.split(' ')[0]} (${x.tardes})`), 6)}.` : `En ${mes} nadie llegó tarde.`, [accion('ir', 'Ver asistencia', { tab: 'asistencia' })]);
+  }
+  // Clases sin profe
+  if (/sin profe/.test(n) || (dice(ws, ['clase']) && dice(ws, ['sin', 'falta', 'libre']))) {
+    const csp = clasesSinProfe();
+    return R(csp.length ? `Clases sin profesor: ${listar(csp.map(c => `${DIAS_CORTOS[c.dia]} ${c.desde} ${c.actividad} (${c.sede})`), 6)}.` : 'Todas las clases tienen profesor.', [accion('ir', 'Ver grilla', { tab: 'grilla' })]);
   }
   // Qué falta cubrir
-  if (/(sin cubrir|falta cubrir|cubrir|reemplazo)/.test(n)) {
+  if (dice(ws, ['cubr', 'reempl', 'hueco'])) {
     const hasta = iso(sumarDias(new Date(), /mes/.test(n) ? 30 : 7));
     const sin = necesidadesFuturas(f || hoy(), f || hasta).filter(x => faltaCubrir(x, S.reemplazos).length);
-    if (!sin.length) return { respuesta: f ? `El ${fechaLarga(f)} está todo cubierto.` : 'Está todo cubierto. 👍', acciones: [] };
+    if (!sin.length) return R(f ? `El ${fechaLarga(f)} está todo cubierto.` : 'Está todo cubierto. 👍');
     const props = sin.slice(0, 3).map(propuestaCubrir);
-    return { respuesta: `Falta cubrir ${sin.length} turno(s): ${listar(props.map(x => x.txt), 3)}.`,
-      acciones: props.map(x => x.acc).filter(Boolean).concat([accion('ir', 'Ver todos', { tab: 'reemplazos' })]).slice(0, 4) };
+    return R(`Falta cubrir ${sin.length} turno(s): ${listar(props.map(x => x.txt), 3)}.`, props.map(x => x.acc).concat([accion('ir', 'Ver todos', { tab: 'reemplazos' })]));
   }
   // Vacaciones / pedidos
-  if (/(vacacion|pedido|pendiente|aprobar)/.test(n)) {
+  if (dice(ws, ['vacacion', 'pedido', 'pendient', 'licencia', 'ausencia'])) {
     const pend = pendientesAus();
-    if (!pend.length) {
-      const prox = S.ausencias.filter(a => a.estado === 'aprobada' && a.hasta >= hoy()).sort((a, b) => a.desde.localeCompare(b.desde));
-      return { respuesta: `No hay pedidos para responder.${prox.length ? ` Próximas: ${listar(prox.map(a => `${(a.nombre || nom(a.email)).split(' ')[0]} ${rangoTexto(a.desde, a.hasta)}`), 4)}.` : ''}`, acciones: [] };
-    }
+    const prox = S.ausencias.filter(a => a.estado === 'aprobada' && a.hasta >= hoy() && (!quien || a.email === quien.email)).sort((a, b) => a.desde.localeCompare(b.desde));
+    if (quien) return R(prox.length ? `${pila(quien)}: ${listar(prox.map(a => `${a.tipo} ${rangoTexto(a.desde, a.hasta)} (${textoDias(a.desde, a.hasta, P(a.email), S.clases)})`))}.` : `${pila(quien)} no tiene vacaciones ni ausencias por delante.`);
+    if (!pend.length) return R(`No hay pedidos para responder.${prox.length ? ` Próximas: ${listar(prox.map(a => `${(a.nombre || nom(a.email)).split(' ')[0]} ${rangoTexto(a.desde, a.hasta)}`), 4)}.` : ''}`);
     const a = pend[0];
-    return { respuesta: `Hay ${pend.length} pedido(s): ${listar(pend.map(x => `${(x.nombre || nom(x.email)).split(' ')[0]} ${rangoTexto(x.desde, x.hasta)}`), 4)}.`,
-      acciones: [accion('aprobar', `Aprobar a ${(a.nombre || '').split(' ')[0]}`, { ausenciaId: a.id }), accion('rechazar', 'Rechazar', { ausenciaId: a.id }), accion('ir', 'Ver todos', { tab: 'vacaciones' })] };
+    return R(`Hay ${pend.length} pedido(s): ${listar(pend.map(x => `${(x.nombre || nom(x.email)).split(' ')[0]} ${rangoTexto(x.desde, x.hasta)}`), 4)}.`,
+      [accion('aprobar', `Aprobar a ${(a.nombre || '').split(' ')[0]}`, { ausenciaId: a.id }), accion('rechazar', 'Rechazar', { ausenciaId: a.id }), accion('ir', 'Ver todos', { tab: 'vacaciones' })]);
   }
   // Censo
-  if (/censo|ficha/.test(n)) {
+  if (dice(ws, ['censo', 'ficha'])) {
     const { filas } = estadoCenso();
     const faltan = filas.filter(x => x.estado === 'sin-enviar' || x.estado === 'enviado');
     const porAprobar = pendientesFicha();
-    return { respuesta: `${faltan.length ? `Faltan completar el censo: ${listar(faltan.map(x => x.r.nombre || ''), 6)}.` : 'Todos completaron el censo.'}${porAprobar.length ? ` Hay ${porAprobar.length} ficha(s) para aprobar.` : ''}`,
-      acciones: [accion('mensaje_censo', 'Copiar mensaje del censo'), ...porAprobar.slice(0, 2).map(p => accion('aprobar_ficha', `Aprobar a ${p.nombre}`, { email: p.email })), accion('ir', 'Ver censo', { tab: 'censo' })].slice(0, 4) };
+    return R(`${faltan.length ? `Faltan completar el censo: ${listar(faltan.map(x => x.r.nombre || ''), 6)}.` : 'Todos completaron el censo.'}${porAprobar.length ? ` Hay ${porAprobar.length} ficha(s) para aprobar.` : ''}`,
+      [accion('mensaje_censo', 'Copiar mensaje del censo'), ...porAprobar.slice(0, 2).map(p => accion('aprobar_ficha', `Aprobar a ${pila(p)}`, { email: p.email })), accion('ir', 'Ver censo', { tab: 'censo' })]);
   }
-  // Quién falta / quién vino
-  if (/(falta|vino|ausente|quien esta|hoy)/.test(n)) {
+  // Quién trabaja un día (y franja)
+  if (f && dice(ws, ['quien', 'trabaj', 'esta', 'viene', 'hay'])) {
+    const dia = deIso(f).getDay(), [a0, a1] = fr ? FRANJA_MIN[fr] : [0, 1440];
+    const van = activos().map(p => ({ p, ag: agenda(p, S.clases).filter(s => s.dia === dia && min(s.desde) < a1 && min(s.hasta) > a0) })).filter(x => x.ag.length);
+    const aus = van.filter(x => ausenteEn(x.p.email, f, S.ausencias));
+    return R(`El ${fechaLarga(f)}${fr ? ' a la ' + FRANJAS[fr].toLowerCase() : ''} trabajan: ${listar(van.filter(x => !aus.includes(x)).map(x => `${pila(x.p)} ${x.ag[0].desde}`), 10)}.${aus.length ? ` No vienen: ${listar(aus.map(x => pila(x.p)))}.` : ''}`, [accion('ver_dia', 'Ver el día con barras', { fecha: f })]);
+  }
+  // Quién falta / quién vino hoy
+  if (dice(ws, ['falta', 'vino', 'ausent', 'quien esta', 'hoy'])) {
     const fecha = f || hoy();
     const aus = S.ausencias.filter(a => a.estado === 'aprobada' && a.desde <= fecha && a.hasta >= fecha);
     const sin = necesidadesFuturas(fecha, fecha).filter(x => faltaCubrir(x, S.reemplazos).length);
-    return { respuesta: `${aus.length ? `El ${fechaLarga(fecha)} no vienen: ${listar(aus.map(a => (a.nombre || nom(a.email)).split(' ')[0]))}.` : `El ${fechaLarga(fecha)} no falta nadie con aviso.`}${sin.length ? ` Quedan ${sin.length} turno(s) sin cubrir.` : ''}`,
-      acciones: [accion('ver_dia', 'Ver el día', { fecha }), ...(sin.length ? [accion('ir', 'Ver reemplazos', { tab: 'reemplazos' })] : [])] };
+    return R(`${aus.length ? `El ${fechaLarga(fecha)} no vienen: ${listar(aus.map(a => (a.nombre || nom(a.email)).split(' ')[0]))}.` : `El ${fechaLarga(fecha)} no falta nadie con aviso.`}${sin.length ? ` Quedan ${sin.length} turno(s) sin cubrir.` : ''}`,
+      [accion('ver_dia', 'Ver el día', { fecha }), sin.length ? accion('ir', 'Ver reemplazos', { tab: 'reemplazos' }) : null]);
   }
-  if (quien) return { respuesta: `¿Qué querés saber de ${quien.nombre}? Te dejo su ficha.`, acciones: [accion('ver_ficha', `Ver ficha de ${quien.nombre}`, { email: quien.email })] };
-  return { respuesta: 'No te entendí. Probá con una de las preguntas de abajo, o con palabras como "¿quién está libre el martes a la tarde?", "¿quién cubre a Roberto?" o "Diego avisó que el jueves no viene".', acciones: [] };
+  // Ir a una pantalla
+  const tab = Object.keys(NOMBRE_TAB).find(k => dice(ws, [sinTildes(NOMBRE_TAB[k]).split(' ')[0]]));
+  if (tab) return R(`Te llevo a ${NOMBRE_TAB[tab]}.`, [accion('ir', `Ir a ${NOMBRE_TAB[tab]}`, { tab })]);
+  // Solo un nombre: resumen de la persona
+  if (quien) {
+    const ag = agenda(quien, S.clases);
+    const prox = S.ausencias.filter(a => a.email === quien.email && a.estado !== 'rechazada' && a.hasta >= hoy());
+    return R(`${nombreCompleto(quien)} · ${(quien.roles || []).map(r => ROL_CORTO[r]).join(', ') || 'sin rol'} · ${ag.length} turno(s)/clase(s) por semana${prox.length ? ` · ${prox[0].tipo} ${rangoTexto(prox[0].desde, prox[0].hasta)}` : ''}.`,
+      [accion('ver_ficha', `Ver ficha de ${pila(quien)}`, { email: quien.email }), quien.telefono ? accion('whatsapp', `WhatsApp a ${pila(quien)}`, { email: quien.email }) : null]);
+  }
+  if (/^(hola|buen|gracias|ok|dale|genial)/.test(n)) return R('¡Hola! Preguntame lo que necesites o tocá una de las preguntas de abajo.');
+  return R('No te entendí. Probá así: "¿quién está libre el martes a la tarde?", "que Diego cubra a Roberto el martes de 11 a 12", "Rosa avisó que el jueves no viene" o "teléfono de Pablo".');
 }
 
 async function preguntarIA(texto) {
@@ -1482,7 +1692,7 @@ async function preguntarIA(texto) {
   try { return JSON.parse(bloque?.text || ''); } catch { return { respuesta: bloque?.text || 'No entendí la respuesta. Probá de nuevo.', acciones: [] }; }
 }
 
-async function ejecutarAccion(x) {
+async function ejecutarAccion(x, sinConfirmar = false) {
   const persona = () => { const p = P(x.email); if (!p) toast('No encontré a esa persona', true); return p; };
   switch (x.tipo) {
     case 'ir': if (NOMBRE_TAB[x.tab]) { if (innerWidth < 900) cerrarAsistente(); irA(x.tab); } return;
@@ -1509,6 +1719,12 @@ async function ejecutarAccion(x) {
       pintarAsistente(); return toast('Falta justificada');
     }
     case 'mensaje_censo': return copiar(msjCenso(''));
+    case 'todas': {
+      if (!(await confirmar(`¿Hacer todo esto?<br>• ${x.sub.map(a => esc(a.etiqueta)).join('<br>• ')}`, { si: 'Sí, hacer todo' }))) return;
+      for (const a of x.sub) await ejecutarAccion(a, true);
+      return;
+    }
+    case 'whatsapp': { const p = persona(); if (p?.telefono) open(waLink(p.telefono, `Hola ${p.nombre}! `), '_blank'); else if (p) toast('No tiene teléfono cargado', true); return; }
     case 'quitar_reemplazo': {
       const r = S.reemplazos.find(r => r.id === x.reemplazoId);
       if (!r) return toast('Ese reemplazo ya no está', true);
@@ -1525,7 +1741,7 @@ async function ejecutarAccion(x) {
       const q = x.reemplazo && P(x.reemplazo);
       const nombre = q ? nombreCompleto(q) : x.reemplazoNombre;
       if (!nombre) return toast('Falta saber quién cubre', true);
-      if (!(await confirmar(`<b>${esc(nombre)}</b> cubre a <b>${esc(nom(n.titular))}</b> el ${fechaLarga(n.fecha)} de <b>${desde}</b> a <b>${hasta}</b>.`, { si: 'Asignar' }))) return;
+      if (!sinConfirmar && !(await confirmar(`<b>${esc(nombre)}</b> cubre a <b>${esc(nom(n.titular))}</b> el ${fechaLarga(n.fecha)} de <b>${desde}</b> a <b>${hasta}</b>.`, { si: 'Asignar' }))) return;
       const quien = q ? { reemplazo: q.email, reemplazoNombre: nombre }
         : { reemplazo: 'externo:' + nombre.toLowerCase().replace(/\s+/g, '-'), reemplazoNombre: nombre, reemplazoTel: '', externo: true };
       try { await agregar('reemplazos', docReemplazo(n, quien, desde, hasta)); } catch { return toast('No se pudo asignar', true); }
