@@ -2,7 +2,7 @@
 // 1 Tus datos · 2 Tu rol · 3 Tus horarios · 4 Consentimiento · 5 Revisar y enviar
 import {
   esc, ROLES, ROL_CORTO, ROLES_TURNO, DIAS, DIAS_CORTOS, DIAS_LABORABLES, SEDES, ACTIVIDADES_BASE, HORARIO_CLUB,
-  dentroHorarioClub, min, sumarMin, FRANJAS, FRANJAS_HORA, fechaCorta, iso,
+  dentroHorarioClub, min, sumarMin, enClasesDeUnaHora, FRANJAS, FRANJAS_HORA, fechaCorta, iso,
 } from './logica.js';
 import { $, $$, toast } from './ui.js';
 import { htmlConsentimiento, DECLARACION, VERSION } from './consentimiento.js';
@@ -112,7 +112,7 @@ export function censoProfe(cont, { persona = {}, clases = [], email = '', barra 
 
         <div class="panel" style="padding:12px;gap:10px;background:var(--bg)" id="nueva-clase">
           <b>${marcadas.length ? '+ Agregar otra clase' : '+ Agregar una clase que doy'}</b>
-          <span class="sub"><b>Una clase por vez.</b> Si das 3 clases distintas, completás esto y tocás "Agregar clase" 3 veces. Si es la misma clase varios días al mismo horario, marcá todos esos días juntos. Se suma a la grilla con tu nombre, al instante.</span>
+          <span class="sub"><b>Una clase por vez.</b> Si das 3 clases distintas, completás esto y tocás "Agregar clase" 3 veces. Si es la misma clase varios días al mismo horario, marcá todos esos días juntos. Las clases duran 1 hora: si das de 8 a 12, poné 8 a 12 y se cargan solas las 4 clases. Se suma a la grilla con tu nombre, al instante.</span>
           <label>Actividad<input id="n-act" list="n-acts" placeholder="Ej.: Funcional, Calistenia, Muay Thai" autocomplete="off"></label>
           <datalist id="n-acts">${actividades.map(a => `<option value="${esc(a)}">`).join('')}</datalist>
           <label>Dónde<select id="n-sede">${SEDES.map(x => `<option>${x}</option>`).join('')}</select></label>
@@ -221,7 +221,8 @@ export function censoProfe(cont, { persona = {}, clases = [], email = '', barra 
       e.target.disabled = true;
       const nombre = `${d.nombre} ${d.apellido}`.trim();
       try {
-        for (const dia of dias) {
+        const horas = enClasesDeUnaHora(desde, hasta);
+        for (const dia of dias) for (const [desde, hasta] of horas) {
           // si ya existe esa misma clase en la grilla, se marca en lugar de duplicarla
           const igual = clases.find(c => c.dia === dia && c.desde === desde && c.sede === sede && c.actividad.toLowerCase() === actividad.toLowerCase());
           if (igual) { if (!d.clases.includes(igual.id)) d.clases.push(igual.id); continue; }
@@ -230,7 +231,7 @@ export function censoProfe(cont, { persona = {}, clases = [], email = '', barra 
           clases = [...clases, { id, ...datos }];
           d.clases.push(id);
         }
-        toast(`${dias.length > 1 ? `Agregaste ${actividad} ${dias.length} días` : `Agregaste ${actividad}`}. Si das otra clase, cargala igual.`);
+        toast(`Agregaste ${horas.length * dias.length} clase(s) de ${actividad}${horas.length > 1 ? ` (de 1 hora: ${horas.map(h => h[0]).join(', ')})` : ''}. Si das otra clase, cargala igual.`);
         diaGrilla = dias[0];
       } catch (err) { console.error(err); toast('No se pudo agregar la clase. Revisá la conexión.', true); }
       const y = scrollY; render(); scrollTo(0, y);

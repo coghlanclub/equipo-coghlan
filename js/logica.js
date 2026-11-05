@@ -102,6 +102,13 @@ export function diasEntre(desde, hasta) { return rangoFechas(desde, hasta).lengt
 export function min(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
 export function hhmm(m) { return `${pad(Math.floor(m / 60))}:${pad(m % 60)}`; }
 export function sumarMin(t, n) { return hhmm(min(t) + n); }
+// Las clases duran 1 hora reloj: un bloque de 8 a 12 son 4 clases (8, 9, 10 y 11).
+// (Los turnos de sala, recepción y limpieza no se parten: van de un horario a otro.)
+export function enClasesDeUnaHora(desde, hasta) {
+  const out = [];
+  for (let m = min(desde); m < min(hasta); m += DURACION_CLASE) out.push([hhmm(m), hhmm(Math.min(m + DURACION_CLASE, min(hasta)))]);
+  return out;
+}
 export function seSolapan(a1, a2, b1, b2) { return min(a1) < min(b2) && min(b1) < min(a2); }
 export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

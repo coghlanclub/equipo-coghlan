@@ -1,5 +1,5 @@
 // Formulario de ficha / censo. Lo usa el profe (alta y edición) y la gerencia.
-import { esc, ROLES, ROL_CORTO, ROLES_TURNO, DIAS, DIAS_CORTOS, DIAS_LABORABLES, ACTIVIDADES_BASE, SEDES, HORARIO_CLUB, dentroHorarioClub, min, sumarMin, SIN_CORREO, sinCorreo, slug, pinAleatorio, FRANJAS, FRANJAS_HORA } from './logica.js';
+import { esc, ROLES, ROL_CORTO, ROLES_TURNO, DIAS, DIAS_CORTOS, DIAS_LABORABLES, ACTIVIDADES_BASE, SEDES, HORARIO_CLUB, dentroHorarioClub, min, sumarMin, enClasesDeUnaHora, SIN_CORREO, sinCorreo, slug, pinAleatorio, FRANJAS, FRANJAS_HORA } from './logica.js';
 import { $, $$, toast } from './ui.js';
 
 // modo: 'profe' (las clases quedan declaradas para que gerencia apruebe) o 'gerencia' (asigna directo)
@@ -66,7 +66,7 @@ export function htmlFormFicha(p = {}, { modo = 'profe', clases = [] } = {}) {
       </div>
       ${modo === 'gerencia' ? `<div class="panel" style="padding:12px;gap:10px;background:var(--bg)">
         <b>+ Agregar una clase que da</b>
-        <span class="sub">Si su clase no está en la grilla, cargala acá. <b>Una clase por vez</b>: actividad, dónde, días y horario, y tocá "Agregar clase". Si da 3 clases distintas, lo hacés 3 veces. Se crea en la grilla a su nombre cuando tocás Guardar.</span>
+        <span class="sub">Si su clase no está en la grilla, cargala acá. <b>Una clase por vez</b>: actividad, dónde, días y horario, y tocá "Agregar clase". Si da 3 clases distintas, lo hacés 3 veces. Las clases duran 1 hora: si da Pilates de 8 a 12, poné 8 a 12 y se cargan solas las 4 clases. Se crea en la grilla a su nombre cuando tocás Guardar.</span>
         <div id="f-nuevas" class="lista"></div>
         <div class="fila"><label>Actividad<input id="nc-act" list="nc-acts" placeholder="Ej.: Local, Zumba" autocomplete="off"></label>
           <label>Dónde<select id="nc-sede">${SEDES.map(x => `<option>${x}</option>`).join('')}</select></label></div>
@@ -183,13 +183,14 @@ export function activarFormFicha(el, p = {}) {
     if (!desde || !hasta || min(hasta) <= min(desde)) return toast('Revisá la hora de inicio y de fin', true);
     const fuera = dias.filter(dia => !dentroHorarioClub({ dia, desde, hasta }));
     if (fuera.length) return toast(`${fuera.map(x => DIAS_CORTOS[x]).join(', ')}: fuera del horario del club`, true);
-    for (const dia of dias) if (!nuevas.some(c => c.dia === dia && c.desde === desde && c.sede === sede && c.actividad.toLowerCase() === actividad.toLowerCase())) nuevas.push({ actividad, sede, dia, desde, hasta });
+    const horas = enClasesDeUnaHora(desde, hasta);
+    for (const dia of dias) for (const [d0, h0] of horas) if (!nuevas.some(c => c.dia === dia && c.desde === d0 && c.sede === sede && c.actividad.toLowerCase() === actividad.toLowerCase())) nuevas.push({ actividad, sede, dia, desde: d0, hasta: h0 });
     nuevas.sort((a, b) => a.dia - b.dia || a.desde.localeCompare(b.desde));
     // La actividad queda marcada como "sabe dar"
     const chk = $$('input[name=act]', el).find(i => i.value.toLowerCase() === actividad.toLowerCase()); if (chk) chk.checked = true;
     $('#nc-act', el).value = ''; $$('#nc-dias input', el).forEach(i => { i.checked = false; });
     pintarNuevas(); actualizar();
-    toast(`Agregada ${actividad}. Si da otra clase, cargala igual. Al final tocá Guardar.`);
+    toast(`Agregadas ${horas.length * dias.length} clase(s) de ${actividad}${horas.length > 1 ? ' de 1 hora' : ''}. Si da otra clase, cargala igual. Al final tocá Guardar.`);
   });
   pintarTurnos(); pintarNuevas(); actualizar();
 
