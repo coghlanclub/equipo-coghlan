@@ -87,7 +87,7 @@ const clasesSinProfe = () => S.clases.filter(c => !c.profesor || P(c.profesor)?.
 // ---------- Corrección automática de la grilla ----------
 // Las clases duran 1 hora: si quedó cargada una clase de varias horas (de antes, o a mano) se parte sola
 // en clases de 1 hora, y si una persona tiene la misma clase repetida a la misma hora se deja una sola.
-let corrigiendo = false;
+let corrigiendo = false, limpiandoCenso = false;
 async function corregirGrilla() {
   if (corrigiendo || !S.listo) return; // Gerencia solo abre para cuentas de gerencia
   const largas = S.clases.filter(c => c.desde && c.hasta && min(c.hasta) - min(c.desde) > DURACION_CLASE);
@@ -95,6 +95,13 @@ async function corregirGrilla() {
   for (const c of [...S.clases].filter(c => !largas.includes(c)).sort((a, b) => (a.profesor ? 0 : 1) - (b.profesor ? 0 : 1) || a.id.localeCompare(b.id))) {
     const k = [c.sede, c.dia, c.desde, sinTildes(c.actividad)].join('|');
     if (vistas.has(k) && (!c.profesor || c.profesor === vistas.get(k).profesor)) repetidas.push(c); else if (!vistas.has(k)) vistas.set(k, c);
+  }
+  const dupCenso = censoUnico().repetidos;
+  if (dupCenso.length && !limpiandoCenso) {
+    limpiandoCenso = true;
+    lote(dupCenso.map(r => ({ c: 'censo', id: r.id, borrar: true })))
+      .then(() => toast(`Saqué ${dupCenso.length} fila(s) repetida(s) de la lista del censo.`)).catch(e => console.error(e))
+      .finally(() => { limpiandoCenso = false; });
   }
   if (!largas.length && !repetidas.length) return;
   corrigiendo = true;
@@ -199,16 +206,36 @@ const ESTADO_CENSO = {
   'sin-enviar': ['Sin enviar', 'neutro'], enviado: ['Link enviado · falta completar', 'pendiente'],
   'por-aprobar': ['Completó · por aprobar', 'info'], listo: ['Censado', 'aprobada'],
 };
+// Ficha de una fila del censo: primero por correo (exacto) y solo si no, por celular
+const fichaDeCenso = r => (r.email && S.personal.find(x => x.email === r.email))
+  || (r.telefono && normTel(r.telefono) && S.personal.find(x => x.estado !== 'inactivo' && normTel(x.telefono) === normTel(r.telefono))) || null;
+const claveCenso = r => {
+  const p = fichaDeCenso(r);
+  return p ? 'p:' + p.email : r.telefono && normTel(r.telefono) ? 't:' + normTel(r.telefono) : 'n:' + sinTildes(r.nombre || '').replace(/\s+/g, ' ').trim();
+};
+// Otra ficha activa con el mismo celular (la misma persona cargada dos veces)
+const fichaRepetida = p => normTel(p.telefono) && S.personal.some(x => x !== p && x.estado !== 'inactivo' && normTel(x.telefono) === normTel(p.telefono));
+// Una sola fila por persona aunque haya quedado repetida en la lista
+function censoUnico() {
+  const vistos = new Map();
+  for (const r of [...S.censo].sort((a, b) => (b.enviado ? 1 : 0) - (a.enviado ? 1 : 0) || (b.email ? 1 : 0) - (a.email ? 1 : 0) || a.id.localeCompare(b.id))) {
+    const k = claveCenso(r);
+    if (!vistos.has(k)) vistos.set(k, r);
+  }
+  return { unicos: [...vistos.values()], repetidos: S.censo.filter(r => vistos.get(claveCenso(r)) !== r) };
+}
 function estadoCenso() {
   const usadas = new Set();
-  const filas = S.censo.map(r => {
-    const p = S.personal.find(x => (r.email && x.email === r.email) || (r.telefono && normTel(x.telefono) === normTel(r.telefono)));
+  const deLista = censoUnico().unicos.map(r => {
+    const p = fichaDeCenso(r);
     if (p) usadas.add(p.email);
-    const estado = p ? (p.estado === 'pendiente' ? 'por-aprobar' : 'listo') : r.enviado ? 'enviado' : 'sin-enviar';
-    return { r, p, estado };
-  }).sort((a, b) => Object.keys(ESTADO_CENSO).indexOf(a.estado) - Object.keys(ESTADO_CENSO).indexOf(b.estado) || (a.r.nombre || '').localeCompare(b.r.nombre || ''));
-  const sueltos = S.personal.filter(p => !usadas.has(p.email) && p.estado !== 'inactivo');
-  return { filas, sueltos };
+    return { r, p };
+  });
+  // Las fichas cargadas a mano (o que llegaron sin estar en la lista) son staff igual: entran solas al censo
+  const aMano = S.personal.filter(p => !usadas.has(p.email) && p.estado !== 'inactivo')
+    .map(p => ({ r: { id: '', nombre: nombreCompleto(p), telefono: p.telefono || '', aMano: true }, p }));
+  const filas = [...deLista, ...aMano].map(({ r, p }) => ({ r, p, estado: p ? (p.estado === 'pendiente' ? 'por-aprobar' : 'listo') : r.enviado ? 'enviado' : 'sin-enviar' })).sort((a, b) => Object.keys(ESTADO_CENSO).indexOf(a.estado) - Object.keys(ESTADO_CENSO).indexOf(b.estado) || (a.r.nombre || '').localeCompare(b.r.nombre || ''));
+  return { filas, sueltos: [] };
 }
 const linkCenso = () => new URL('profesor.html', location.href).href;
 const msjCenso = nombre => `Hola${nombre ? ' ' + nombre.split(' ')[0] : ''}! Estamos haciendo el censo del personal de Coghlan Club. Completá tu ficha acá, te lleva 5 minutos: ${linkCenso()}
@@ -253,7 +280,7 @@ function vCenso(v) {
     </div>
     <div class="panel"><h3>Personal a censar (${total})</h3>
       ${total ? `<div class="tabla-wrap"><table><thead><tr><th>Persona</th><th>Celular</th><th>Estado</th><th>Consentimiento</th><th>Acciones</th></tr></thead><tbody>
-      ${filas.map(({ r, p, estado }) => `<tr><td><b>${esc(r.nombre)}</b>${p && p.sinCelular ? ' <span class="pill neutro">sin celular · PIN</span>' : ''}</td><td class="mono">${esc(r.telefono || '—')}</td>
+      ${filas.map(({ r, p, estado }) => `<tr><td><b>${esc(r.nombre)}</b>${p && p.sinCelular ? ' <span class="pill neutro">sin celular · PIN</span>' : ''}${r.aMano ? ' <span class="pill neutro">cargada a mano</span>' : ''}${p && fichaRepetida(p) ? ' <span class="pill pendiente" title="Hay otra ficha activa con el mismo celular. Si es la misma persona, dejá una sola.">2 fichas con este celular</span>' : ''}</td><td class="mono">${esc(r.telefono || '—')}</td>
         <td><span class="pill ${ESTADO_CENSO[estado][1]}">${ESTADO_CENSO[estado][0]}</span>${r.enviado && estado === 'enviado' ? `<br><span class="sub">enviado el ${fechaCorta(iso(new Date(ms(r.enviado))))}</span>` : ''}</td>
         <td>${!p ? '<span class="sub">—</span>' : p.consentimiento?.aceptado ? `<span class="pill aprobada">${p.consentimiento.papel ? 'En papel' : 'Firmado'}</span>` : '<span class="pill sin">Falta</span>'}</td>
         <td><div class="acciones">
@@ -261,17 +288,19 @@ function vCenso(v) {
             <button class="btn sm ghost" data-completar="${r.id}">Lo completo yo</button>` : ''}
           ${estado === 'por-aprobar' ? `<button class="btn sm ok" data-aprobar-c="${esc(p.email)}">Aprobar</button>` : ''}
           ${p ? `<button class="btn sm ghost" data-ficha="${esc(p.email)}">Ver ficha</button>` : ''}
-          <button class="btn sm ghost" data-quitar-c="${r.id}" aria-label="Quitar de la lista">×</button></div></td></tr>`).join('')}
+          ${r.id ? `<button class="btn sm ghost" data-quitar-c="${r.id}" aria-label="Quitar de la lista">×</button>` : ''}</div></td></tr>`).join('')}
       </tbody></table></div>` : '<p class="vacio">Todavía no cargaste la lista. Pegala arriba: un renglón por persona.</p>'}</div>
     ${sueltos.length ? `<div class="panel"><h3>Fichas que no están en la lista (${sueltos.length})</h3><p class="sub">Completaron la ficha o las cargaste antes de armar la lista.</p>
-      <div class="lista">${sueltos.map(p => `<div class="item"><div><b>${esc(nombreCompleto(p))}</b><span class="sub mono">${esc(p.telefono || '')}</span></div>
+      <div class="lista">${sueltos.map(p => `<div class="item"><div><b>${esc(nombreCompleto(p))}</b>${fichaRepetida(p) ? ' <span class="pill pendiente">ficha repetida</span>' : ''}<span class="sub mono">${esc(p.telefono || '')}</span></div>
         <div class="acciones">${p.estado === 'pendiente' ? `<button class="btn sm ok" data-aprobar-c="${esc(p.email)}">Aprobar</button>` : ''}<button class="btn sm ghost" data-sumar="${esc(p.email)}">Sumar a la lista</button></div></div>`).join('')}</div></div>` : ''}`;
   $('#copiar-grupo').onclick = () => copiar(msjCenso(''));
   $('#agregar-lista').onclick = async () => {
     const rs = $('#lista-pegar').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
       const m = l.match(/^(.*?)[,;\t]\s*([\d\s()+-]{6,})\s*$/) || l.match(/^(.*?)\s+([\d\s()+-]{8,})$/);
       return m ? { nombre: m[1].trim(), telefono: m[2].trim() } : { nombre: l, telefono: '' };
-    }).filter(r => r.nombre && !S.censo.some(c => c.telefono && r.telefono && normTel(c.telefono) === normTel(r.telefono)));
+    }).filter(r => r.nombre);
+    const ya = new Set(S.censo.map(claveCenso));
+    for (const r of rs.splice(0)) { const k = claveCenso(r); if (!ya.has(k)) { ya.add(k); rs.push(r); } }
     if (!rs.length) return toast('No hay nombres nuevos para agregar', true);
     await lote(rs.map(r => ({ c: 'censo', id: Math.random().toString(36).slice(2, 12), data: { ...r, creado: AHORA } })));
     toast(`${rs.length} persona(s) agregadas`);
@@ -284,7 +313,10 @@ function vCenso(v) {
   });
   $$('[data-aprobar-c]', v).forEach(b => b.onclick = () => aprobarFicha(P(b.dataset.aprobarC)));
   $$('[data-quitar-c]', v).forEach(b => b.onclick = async () => { await borrar('censo', b.dataset.quitarC); toast('Quitado de la lista'); });
-  $$('[data-sumar]', v).forEach(b => b.onclick = async () => { const p = P(b.dataset.sumar); await agregar('censo', { nombre: nombreCompleto(p), telefono: p.telefono || '', email: p.email, creado: AHORA }); toast('Sumado a la lista'); });
+  $$('[data-sumar]', v).forEach(b => b.onclick = async () => {
+    const p = P(b.dataset.sumar);
+    if (b.disabled || S.censo.some(r => claveCenso(r) === 'p:' + p.email)) return;
+    b.disabled = true; await agregar('censo', { nombre: nombreCompleto(p), telefono: p.telefono || '', email: p.email, creado: AHORA }); toast('Sumado a la lista'); });
   enlazarFichas(v);
 }
 
@@ -1253,7 +1285,7 @@ registrarGuia({
 // - Preguntas con palabras comunes (escritas o dictadas por voz). Claude contesta corto, lleva a la
 //   pantalla que corresponde y propone acciones. Nada se hace sin que alguien toque el botón y confirme.
 // La app arma un resumen de los datos y se lo manda al script de Google (el mismo de los correos), que le pregunta a Claude.
-const PREGUNTAS = ['¿Qué falta cubrir esta semana?', '¿Quién falta hoy?', '¿Quién está libre mañana a la tarde?', '¿Hay vacaciones para aprobar?', '¿Quién falta completar el censo?', '¿Cómo se usa esta pantalla?'];
+const PREGUNTAS = ['¿Cuántos profesores tenemos?', '¿Qué falta cubrir esta semana?', '¿Quién falta hoy?', '¿Quién está libre mañana a la tarde?', '¿Hay vacaciones para aprobar?', '¿Quién falta completar el censo?', '¿Cómo se usa esta pantalla?'];
 const AS = { abierto: false, chat: [], esperando: false, escuchando: false };
 const NOMBRE_TAB = Object.fromEntries(TABS);
 
@@ -1288,7 +1320,7 @@ Para buscar quién puede cubrir: mismo rol (y misma actividad si es una clase), 
 No inventes emails ni ids: copialos de los datos.`;
 
 const CAMPOS_ACCION = ['tipo', 'etiqueta', 'tab', 'email', 'fecha', 'desde', 'hasta', 'ausenciaId', 'reemplazoId', 'titular', 'reemplazo', 'reemplazoNombre', 'tipoAusencia', 'tipoFichaje', 'motivo'];
-const TIPOS_ACCION = ['todas', 'whatsapp', 'ir', 'ver_ficha', 'ver_dia', 'ver_pedido', 'asignar', 'quitar_reemplazo', 'aprobar', 'rechazar', 'aprobar_ficha', 'habilitar_celular', 'cargar_ausencia', 'justificar_falta', 'fichaje_manual', 'mensaje_censo'];
+const TIPOS_ACCION = ['preguntar', 'todas', 'whatsapp', 'ir', 'ver_ficha', 'ver_dia', 'ver_pedido', 'asignar', 'quitar_reemplazo', 'aprobar', 'rechazar', 'aprobar_ficha', 'habilitar_celular', 'cargar_ausencia', 'justificar_falta', 'fichaje_manual', 'mensaje_censo'];
 const ESQUEMA_ASISTENTE = {
   type: 'object', additionalProperties: false, required: ['respuesta', 'acciones'],
   properties: {
@@ -1487,6 +1519,10 @@ function actividadEn(t) {
   return todas.find(a => n.includes(sinTildes(a))) || todas.find(a => palabras(a).every(w => w.length < 4 || palabras(t).some(x => x.length >= 4 && lev(x, w) <= 1))) || null;
 }
 
+// Preguntas de ejemplo: cuando algo no se entiende, se ofrecen las más parecidas como botones
+const EJEMPLOS = ['¿Cuántos profesores tenemos?', '¿Qué falta cubrir esta semana?', '¿Quién falta hoy?', '¿Quién está libre mañana a la tarde?',
+  '¿Hay vacaciones para aprobar?', '¿Cuántas clases hay por semana?', '¿Quién llegó tarde este mes?', '¿Quién falta completar el censo?',
+  '¿Cuántas personas hay en recepción?', '¿Qué clases no tienen profe?', '¿Quién trabaja mañana?', '¿Cómo se usa esta pantalla?'];
 function responderLocal(texto) {
   const n = sinTildes(texto), ws = palabras(texto);
   const ps = personasEn(texto), quien = ps[0] || null, f = fechaEn(texto), fr = franjaEn(texto), hs = horasEn(texto), fs = fechasEn(texto);
@@ -1517,7 +1553,7 @@ function responderLocal(texto) {
   if (/como (se usa|uso|hago|funciona)|que hago aca|que es esto|esta pantalla|^ayuda/.test(n))
     return R(`Estás en ${NOMBRE_TAB[S.tab]}. ${AYUDA_TAB[S.tab] || ''} Si querés, preguntame directamente lo que necesitás.`);
   if (/que (podes|sabes) hacer|que te puedo (pedir|preguntar)/.test(n))
-    return R('Puedo decirte qué falta cubrir, quién está libre, quién cubre a quién, horarios, teléfonos y PIN. Y hacer cosas: asignar reemplazos, aprobar o cargar vacaciones, ausencias y fichajes. Por ejemplo: "que Diego cubra a Roberto el martes de 11 a 12".');
+    return R('Puedo decirte cuántos profes hay y quiénes son, cuántas clases hay, qué falta cubrir, quién está libre, quién cubre a quién, horarios, teléfonos y PIN. Y hacer cosas: asignar reemplazos, aprobar o cargar vacaciones, ausencias y fichajes. Por ejemplo: "que Diego cubra a Roberto el martes de 11 a 12".');
 
   // ----- Órdenes -----
   // Asignar un reemplazo: "que Diego cubra a Roberto el martes de 11 a 12", "Diego reemplaza a Roberto el 10"
@@ -1601,6 +1637,38 @@ function responderLocal(texto) {
   if (quien && /\bpin\b/.test(n)) return R(quien.sinCelular ? `El PIN de ${pila(quien)} es ${quien.pin || '(sin PIN)'}. Lo usa en la PC de recepción.` : `${pila(quien)} ficha con su celular, no tiene PIN.`, [accion('ver_ficha', 'Ver ficha', { email: quien.email })]);
 
   // ----- Consultas -----
+  // Cantidades y listados: "¿cuántos profesores tenemos?", "lista de recepción", "¿cuántas clases de pilates hay?", "el staff"
+  const pideCuenta = dice(ws, ['staff', 'plantel', 'nomina'])
+    || /cuant|cunat|cuamt|cantidad|\blistado?\b|\btotal\b|quienes (son|estan|trabajan|dan|tenemos|hay)|nombrame|decime (los|las|todos|quienes)|todos los|todas las/.test(n);
+  if (pideCuenta && !quien && !f && !dice(ws, ['libre', 'disponib', 'cubr', 'reempl', 'vacacion', 'pedido', 'llegada', 'fich', 'pendient'])
+      && !/tarde|horas|falt/.test(n)) {
+    const act = actividadEn(texto);
+    const sede = SEDES.find(x => ws.includes(sinTildes(x)));
+    const deProfes = dice(ws, ['profe', 'instruct', 'docent', 'entrenad', 'coach']);
+    // Clases de la grilla
+    if (dice(ws, ['clase']) && !deProfes) {
+      const cs = S.clases.filter(c => (!act || c.actividad === act) && (!sede || c.sede === sede));
+      const porSede = SEDES.map(x => [x, cs.filter(c => c.sede === x).length]).filter(x => x[1]);
+      const porAct = [...new Set(cs.map(c => c.actividad))];
+      const sinP = cs.filter(c => !c.profesor).length;
+      return R(cs.length ? `Hay ${cs.length} clase${cs.length > 1 ? 's' : ''} por semana${act ? ' de ' + act : ''}${sede ? ' en ' + sede : ''}${!sede && porSede.length > 1 ? ` (${porSede.map(([x, k]) => `${k} en ${x}`).join(', ')})` : ''}.${!act && porAct.length ? ` Son ${porAct.length} actividades distintas.` : ''}${sinP ? ` ${sinP} no ${sinP > 1 ? 'tienen' : 'tiene'} profe.` : ' Todas tienen profe.'}`
+        : `No hay clases${act ? ' de ' + act : ''}${sede ? ' en ' + sede : ''} en la grilla.`, [accion('ir', 'Ver grilla', { tab: 'grilla' })]);
+    }
+    // Personas del equipo
+    const rolQ = dice(ws, ['sala', 'muscul']) ? ['musculacion'] : dice(ws, ['recep']) ? ['recepcion'] : dice(ws, ['limpi']) ? ['limpieza'] : deProfes || act ? ['clases', 'musculacion'] : null;
+    const gente = activos().filter(p => (!rolQ || (p.roles || []).some(r => rolQ.includes(r)))
+      && (!act || (p.actividades || []).includes(act) || S.clases.some(c => c.profesor === p.email && c.actividad === act))
+      && (!sede || S.clases.some(c => c.profesor === p.email && c.sede === sede)))
+      .sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b)));
+    const [uno, varios] = !rolQ ? ['persona', 'personas'] : rolQ.length === 2 ? ['profe', 'profes'] : rolQ[0] === 'musculacion' ? ['profe de sala', 'profes de sala'] : [`persona en ${ROL_CORTO[rolQ[0]].toLowerCase()}`, `personas en ${ROL_CORTO[rolQ[0]].toLowerCase()}`];
+    const filtro = `${act ? ' que dan ' + act : ''}${sede ? ' en ' + sede : ''}`;
+    const desglose = (rolQ || Object.keys(ROLES)).map(r => [r, gente.filter(p => (p.roles || []).includes(r)).length]).filter(x => x[1]);
+    const ambos = rolQ?.length === 2 ? gente.filter(p => ['clases', 'musculacion'].every(r => (p.roles || []).includes(r))).length : 0;
+    const porAprobar = pendientesFicha().filter(p => !rolQ || (p.roles || []).some(r => rolQ.includes(r))).length;
+    if (!gente.length) return R(`No encontré ${varios}${filtro}.${porAprobar ? ` Hay ${porAprobar} ficha(s) esperando aprobación.` : ''}`, [accion('ir', 'Ver personal', { tab: 'personal' })]);
+    return R(`${gente.length === 1 ? `Hay 1 ${uno}` : `Tenemos ${gente.length} ${varios}`}${filtro}${!act && !sede && desglose.length > 1 ? `: ${desglose.map(([r, k]) => `${k} de ${ROL_CORTO[r].toLowerCase()}`).join(', ')}${ambos ? ` (${ambos} hace${ambos > 1 ? 'n' : ''} las dos cosas)` : ''}` : ''}. ${gente.length > 1 ? 'Son' : 'Es'}: ${listar(gente.map(nombreCompleto), 12)}.${porAprobar ? ` Además hay ${porAprobar} ficha(s) esperando aprobación.` : ''}`,
+      [accion('ir', 'Ver personal', { tab: 'personal' }), ...(gente.length <= 3 ? gente.map(p => accion('ver_ficha', `Ficha de ${pila(p)}`, { email: p.email })) : [])]);
+  }
   // Quién está libre
   if (dice(ws, ['libre', 'disponib', 'puede cubrir', 'quien puede'])) {
     const fecha = f || hoy();
@@ -1703,8 +1771,12 @@ function responderLocal(texto) {
     return R(`${nombreCompleto(quien)} · ${(quien.roles || []).map(r => ROL_CORTO[r]).join(', ') || 'sin rol'} · ${resumenSemana(ag)}${prox.length ? ` · ${prox[0].tipo} ${rangoTexto(prox[0].desde, prox[0].hasta)}` : ''}.`,
       [accion('ver_ficha', `Ver ficha de ${pila(quien)}`, { email: quien.email }), quien.telefono ? accion('whatsapp', `WhatsApp a ${pila(quien)}`, { email: quien.email }) : null]);
   }
-  if (/^(hola|buen|gracias|ok|dale|genial)/.test(n)) return R('¡Hola! Preguntame lo que necesites o tocá una de las preguntas de abajo.');
-  return R('No te entendí. Probá así: "¿quién está libre el martes a la tarde?", "que Diego cubra a Roberto el martes de 11 a 12", "Rosa avisó que el jueves no viene" o "teléfono de Pablo".');
+  if (/^(hola|buen|gracias|ok|dale|genial|listo|perfecto|joya|barbaro|bien)/.test(n)) return R(/^(hola|buen)/.test(n) ? '¡Hola! Preguntame lo que necesites o tocá una de las preguntas de abajo.' : '👍 Cuando necesites algo, escribime.');
+  // No quedó claro: ofrece las preguntas que más se parecen, para tocar y listo
+  const parecidas = EJEMPLOS.map(q => ({ q, pts: palabras(q).filter(w => w.length >= 4 && ws.some(x => x.length >= 4 && (x.startsWith(w.slice(0, Math.max(4, w.length - 2))) || lev(x, w) <= 1))).reduce((t, w) => t + w.length, 0) }))
+    .sort((a, b) => b.pts - a.pts).slice(0, 3);
+  return R(parecidas[0].pts ? '¿Quisiste preguntar alguna de estas? Tocá la que va.' : 'No estoy seguro de qué necesitás. Tocá una de estas o escribilo de otra forma (por ejemplo "que Diego cubra a Roberto el martes de 11 a 12").',
+    parecidas.map(x => accion('preguntar', x.q, { texto: x.q })));
 }
 
 async function preguntarIA(texto) {
@@ -1735,6 +1807,7 @@ async function preguntarIA(texto) {
 async function ejecutarAccion(x, sinConfirmar = false) {
   const persona = () => { const p = P(x.email); if (!p) toast('No encontré a esa persona', true); return p; };
   switch (x.tipo) {
+    case 'preguntar': return enviarPregunta(x.texto);
     case 'ir': if (NOMBRE_TAB[x.tab]) { if (innerWidth < 900) cerrarAsistente(); irA(x.tab); } return;
     case 'ver_ficha': { const p = persona(); if (p) verFicha(p); return; }
     case 'ver_dia': if (x.fecha) verDia(x.fecha); return;
