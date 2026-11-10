@@ -16,13 +16,14 @@ import { botonGuia, registrarGuia } from './guia.js';
 
 const app = $('#app');
 const TABS = [
-  ['hoy', 'Hoy'], ['censo', 'Censo'], ['personal', 'Personal'], ['grilla', 'Grilla de clases'], ['vacaciones', 'Vacaciones y ausencias'],
-  ['reemplazos', 'Reemplazos'], ['asistencia', 'Asistencia'], ['ajustes', 'Ajustes'],
+  ['hoy', 'Hoy'], ['grilla', 'Grilla'], ['reemplazos', 'Reemplazos'], ['personal', 'Staff'], ['externos', 'Externos'],
+  ['vacaciones', 'Vacaciones'], ['asistencia', 'Asistencia'], ['censo', 'Censo'], ['ajustes', 'Ajustes'],
 ];
 const S = {
   user: null, recepcion: [], tab: (location.hash.slice(1) || 'hoy'), personal: [], clases: [], ausencias: [], reemplazos: [], fichajes: [], fichajesHoy: [],
   config: {}, admins: [], censo: [], mesAsis: mesDe(new Date()), mesCal: mesDe(new Date()), mesGrilla: mesDe(new Date()), sede: 'Anexo', vistaGrilla: 'semana',
   filtroRol: '', buscar: '', soloSinCubrir: true, personaAsis: '', listo: false, histAnio: '', histPersona: '',
+  externos: [], extListo: false, remVista: 'cubrir', histMes: mesDe(new Date()), histTipo: 'todos', semanaClases: undefined,
 };
 if (!TABS.some(t => t[0] === S.tab)) S.tab = 'hoy';
 let subs = [];
@@ -50,6 +51,7 @@ alCambiarUsuario(async u => {
     escuchar('recepcion', [], d => { S.recepcion = d; pintar(); }, err),
     escuchar('censo', [], d => { S.censo = d; pintar(); }, err),
     escucharDoc('config', 'general', c => { S.config = c || {}; pintar(); }),
+    escucharDoc('config', 'externos', c => { S.externos = c?.lista || []; S.extListo = true; pintar(); }),
     escuchar('fichajes', [['fecha', '==', hoy()]], d => { S.fichajesHoy = d; pintar(); }, err),
   );
   suscribirMes();
@@ -84,10 +86,50 @@ const sinCubrir14 = () => necesidadesFuturas(hoy(), iso(sumarDias(new Date(), 14
 // Las clases que cargó un profe con la ficha por aprobar ya cuentan como con profe
 const clasesSinProfe = () => S.clases.filter(c => !c.profesor || P(c.profesor)?.estado === 'inactivo');
 
+// ---------- Externos: contratados que NO son staff, solo cubren reemplazos ----------
+const ACT_ROL = { musculacion: 'Musculación', recepcion: 'Recepción', limpieza: 'Limpieza' };
+const queAct = n => n.rol === 'clases' ? n.actividad : ACT_ROL[n.rol];
+// "Queda libre (sin profe)": el hueco se deja sin cubrir a propósito
+const esLibre = r => /^queda libre/i.test(r?.reemplazoNombre || '');
+const slugExt = nombre => 'externo:' + sinTildes(nombre).trim().replace(/[^a-z0-9ñ]+/g, '-').replace(/^-|-$/g, '');
+// La carpeta: los guardados + los que ya cubrieron alguna vez (se suman solos)
+function externos() {
+  const lista = (S.externos || []).map(x => ({ ...x }));
+  for (const r of S.reemplazos.filter(r => r.externo && !esLibre(r))) {
+    if (lista.some(x => x.id === r.reemplazo)) continue;
+    lista.push({ id: r.reemplazo, nombre: r.reemplazoNombre || 'Sin nombre', tel: r.reemplazoTel || '', acts: [queAct(r)].filter(Boolean), disp: '', auto: true });
+  }
+  return lista.filter(x => !x.oculto).sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+const EXT = id => externos().find(x => x.id === id) || (S.externos || []).find(x => x.id === id);
+async function guardarExternos(lista) { await guardar('config', 'externos', { lista: lista.map(({ auto, ...x }) => x) }); }
+// Todos (incluso los quitados de la carpeta) para no perder datos al guardar
+const todosExt = () => { const vis = externos(); return [...vis, ...(S.externos || []).filter(x => x.oculto && !vis.some(v => v.id === x.id))]; };
+const libreExt = (x, fecha, desde, hasta) => !S.reemplazos.some(r => r.reemplazo === x.id && r.fecha === fecha && seSolapan(r.desde, r.hasta, desde, hasta));
+const minR = r => min(r.hasta) - min(r.desde);
+const horasTxt = m => m % 60 ? fmtMin(m) : `${m / 60} h`;
+
+// Estado de cada pedazo de turno, con un color fijo en toda la app:
+// titular (verde), cubre alguien del staff (azul), cubre un externo (violeta), falta cubrir (rojo), queda libre (gris)
+const ESTADOS_TURNO = { tit: 'Titular', stf: 'Cubre staff', ext: 'Cubre externo', falta: 'Falta cubrir', libre: 'Queda libre' };
+const estadoR = r => esLibre(r) ? 'libre' : r.externo ? 'ext' : 'stf';
+const leyendaEstados = () => `<span class="leyenda est-ley">${Object.entries(ESTADOS_TURNO).map(([k, t]) => `<span><i class="sw est-${k}"></i>${t}</span>`).join('')}</span>`;
+// Botones que abren "Resolver" desde cualquier pantalla (línea del día, grilla, para resolver)
+const RES = new Map(); let resN = 0;
+const regResolver = n => { RES.set(++resN, n); return resN; };
+document.addEventListener('click', e => { const b = e.target.closest('[data-resolver]'); if (b && RES.has(+b.dataset.resolver)) { e.preventDefault(); b.closest('.modal-fondo')?.remove(); resolver(RES.get(+b.dataset.resolver)); } });
+// Panel para cubrir un turno sin moverse de la pantalla: staff libre primero, después externos
+function resolver(n) {
+  const actual = necesidadesFuturas(n.fecha, n.fecha).find(x => x.titular === n.titular && x.desde === n.desde && (x.actividad || '') === (n.actividad || '')) || n;
+  const m = modal(`${cabModal('Cubrir turno')}<div class="persona"><div class="avatar">${esc(iniciales(P(actual.titular) || {}))}</div><div><b>Falta ${esc(nom(actual.titular))}</b><span class="sub">${esc(queCubre(actual))} · ${fechaLarga(actual.fecha)}</span></div></div>
+    <div id="res-cuerpo">${htmlNecesidad(actual)}</div><div class="modal-pie"><button class="btn ghost" data-cerrar>Listo</button></div>`, { ancho: true });
+  enlazarNecesidades(m.el, () => m.cerrar());
+}
+
 // ---------- Corrección automática de la grilla ----------
 // Las clases duran 1 hora: si quedó cargada una clase de varias horas (de antes, o a mano) se parte sola
 // en clases de 1 hora, y si una persona tiene la misma clase repetida a la misma hora se deja una sola.
-let corrigiendo = false, limpiandoCenso = false;
+let corrigiendo = false, limpiandoCenso = false, guardandoExt = false;
 async function corregirGrilla() {
   if (corrigiendo || !S.listo) return; // Gerencia solo abre para cuentas de gerencia
   const largas = S.clases.filter(c => c.desde && c.hasta && min(c.hasta) - min(c.desde) > DURACION_CLASE);
@@ -95,6 +137,10 @@ async function corregirGrilla() {
   for (const c of [...S.clases].filter(c => !largas.includes(c)).sort((a, b) => (a.profesor ? 0 : 1) - (b.profesor ? 0 : 1) || a.id.localeCompare(b.id))) {
     const k = [c.sede, c.dia, c.desde, sinTildes(c.actividad)].join('|');
     if (vistas.has(k) && (!c.profesor || c.profesor === vistas.get(k).profesor)) repetidas.push(c); else if (!vistas.has(k)) vistas.set(k, c);
+  }
+  if (S.extListo && !guardandoExt && externos().some(x => x.auto)) {
+    guardandoExt = true;
+    guardarExternos(todosExt()).catch(e => console.error(e)).finally(() => { guardandoExt = false; });
   }
   const dupCenso = censoUnico().repetidos;
   if (dupCenso.length && !limpiandoCenso) {
@@ -137,16 +183,17 @@ function render() {
   if (!S.user || !S.listo) return;
   const y = scrollY;
   const cuentas = { censo: estadoCenso().filas.filter(f => f.estado === 'por-aprobar').length, personal: pendientesFicha().length + pedidosCelular().length, vacaciones: pendientesAus().length, reemplazos: sinCubrir14().length };
+  const ext = externos().length;
   app.innerHTML = `<header class="barra"><div class="barra-in">
       <a class="marca" href="gerencia.html">coghlan<b>club</b><small>Gerencia</small></a>
       <div class="der">${botonGuia()}<span class="sub" style="font-size:.8rem">${esc(S.user.email)}</span><button class="btn sm ghost" id="salir">Salir</button></div></div>
-    <nav class="tabs" role="tablist">${TABS.map(([k, t]) => `<button class="tab" role="tab" data-tab="${k}" aria-selected="${S.tab === k}">${t}${cuentas[k] ? `<span class="cuenta">${cuentas[k]}</span>` : ''}</button>`).join('')}</nav>
+    <nav class="tabs" role="tablist">${TABS.map(([k, t]) => `<button class="tab" role="tab" data-tab="${k}" aria-selected="${S.tab === k}">${t}${cuentas[k] ? `<span class="cuenta">${cuentas[k]}</span>` : k === 'externos' && ext ? `<span class="cuenta ext">${ext}</span>` : ''}</button>`).join('')}</nav>
   </header><main id="vista"></main>`;
   $('#salir').onclick = () => salir();
   $$('[data-tab]').forEach(b => b.onclick = () => irA(b.dataset.tab));
   montarAsistente();
   corregirGrilla();
-  ({ hoy: vHoy, censo: vCenso, personal: vPersonal, grilla: vGrilla, vacaciones: vVacaciones, reemplazos: vReemplazos, asistencia: vAsistencia, ajustes: vAjustes })[S.tab]($('#vista'));
+  ({ hoy: vHoy, censo: vCenso, personal: vPersonal, externos: vExternos, grilla: vGrilla, vacaciones: vVacaciones, reemplazos: vReemplazos, asistencia: vAsistencia, ajustes: vAjustes })[S.tab]($('#vista'));
   scrollTo(0, y);
 }
 function irA(tab) { S.tab = tab; history.replaceState(null, '', '#' + tab); render(); scrollTo(0, 0); }
@@ -181,23 +228,42 @@ function vHoy(v) {
   }
   filas.sort((a, b) => a.ini - b.ini);
   const sc = sinCubrir14(); const csp = clasesSinProfe();
+  // Para resolver: lo que falta cubrir en los próximos 7 días y los pedidos sin responder
+  const faltan = necesidadesFuturas(h, iso(sumarDias(new Date(), 7))).filter(n => faltaCubrir(n, S.reemplazos).length);
+  const hoyFaltan = faltan.filter(n => n.fecha === h);
+  const minFaltaHoy = hoyFaltan.reduce((t, n) => t + faltaCubrir(n, S.reemplazos).reduce((u, [a, b]) => u + min(b) - min(a), 0), 0);
+  const items = [
+    // Una fila por persona y día; cada turno o clase que falta es un botón para resolverlo
+    ...Object.values(faltan.reduce((g, n) => { (g[n.fecha + n.titular] = g[n.fecha + n.titular] || []).push(n); return g; }, {})).slice(0, 6).map(ns => { const n = ns[0];
+      return `<div class="item fila-est falta"><div><b>${n.fecha === h ? 'Hoy' : DIAS_CORTOS[n.dia] + ' ' + fechaCorta(n.fecha).slice(0, 5)} falta ${esc(nom(n.titular).split(' ')[0])}</b>
+      <span class="sub">${ns.length} ${ns.length === 1 ? 'turno' : 'turnos'} sin cubrir · tocá uno para resolverlo</span></div>
+      <div class="acciones">${ns.map(x => `<button class="btn sm" data-resolver="${regResolver(x)}">${x.generico ? 'A confirmar' : `<span class="mono">${faltaCubrir(x, S.reemplazos)[0]?.[0] || x.desde}</span>&nbsp;${esc(x.rol === 'clases' ? x.actividad : ROL_CORTO[x.rol])}`}</button>`).join('')}</div></div>`; }),
+    ...pendientesAus().slice(0, 4).map(a => `<div class="item fila-est pend"><div><b>${esc((a.nombre || nom(a.email)).split(' ')[0])} pide ${a.tipo === 'vacaciones' ? 'vacaciones' : 'ausencia'}</b><span class="sub"><span class="mono">${rangoTexto(a.desde, a.hasta)}</span> · ${textoDias(a.desde, a.hasta, P(a.email), S.clases)}</span></div>
+      <div class="acciones"><button class="btn sm ok" data-apr-hoy="${a.id}">Aprobar</button><button class="btn sm ghost" data-ver-hoy="${a.id}">Ver</button></div></div>`),
+  ];
   v.innerHTML = `
     <div class="cab"><div><span class="eyebrow">${fechaLarga(h)}</span><h1>Hoy en el club</h1></div>
       <div class="acciones"><a class="btn ghost" href="tablet.html" target="_blank" rel="noopener">Abrir QR de recepción</a></div></div>
     <div class="kpis">
-      <button class="kpi" data-ir="asistencia"><b>${dentro.length}</b><span>en el club ahora</span></button>
+      <button class="kpi ok" data-ir="asistencia"><b>${dentro.length}</b><span>en el club ahora</span></button>
+      <button class="kpi ${minFaltaHoy ? 'alerta' : 'ok'}" data-ir="reemplazos"><b>${minFaltaHoy ? horasTxt(minFaltaHoy) : '✓'}</b><span>${minFaltaHoy ? 'sin cubrir hoy' : 'hoy está todo cubierto'}</span></button>
       <button class="kpi ${pendientesFicha().length ? 'alerta' : ''}" data-ir="personal"><b>${pendientesFicha().length}</b><span>fichas nuevas por aprobar</span></button>
       <button class="kpi ${pendientesAus().length ? 'alerta' : ''}" data-ir="vacaciones"><b>${pendientesAus().length}</b><span>pedidos de vacaciones/ausencia</span></button>
       <button class="kpi ${sc.length ? 'alerta' : ''}" data-ir="reemplazos"><b>${sc.length}</b><span>turnos sin cubrir (14 días)</span></button>
       <button class="kpi ${csp.length ? 'alerta' : ''}" data-ir="grilla"><b>${csp.length}</b><span>clases sin profesor</span></button>
     </div>
-    <div class="panel"><h3>Quién trabaja hoy</h3>
+    ${items.length ? `<div class="panel"><h3>Para resolver</h3><div class="lista">${items.join('')}</div></div>` : '<div class="todo-ok">✓ Nada para resolver</div>'}
+    <div class="panel"><div class="cab"><h3>Quién está hoy, hora por hora</h3>${leyendaEstados()}</div>${lineaDelDia(h) || '<p class="vacio">Hoy no hay turnos.</p>'}<span class="sub">Tocá lo rojo para cubrirlo, o un nombre para ver su ficha.</span></div>
+    <div class="panel"><h3>Llegadas de hoy</h3>
       ${filas.length ? `<div class="tabla-wrap"><table><thead><tr><th>Persona</th><th>Horario de hoy</th><th>Estado</th></tr></thead><tbody>
         ${filas.map(f => `<tr><td><button class="btn sm ghost" data-ficha="${esc(f.p.email)}">${esc(nombreCompleto(f.p))}</button></td>
           <td><div class="slots">${f.todos.map(s => `<span class="slot-mini rol-${s.rol}"><span class="mono">${s.desde}–${s.hasta}</span> ${esc(s.actividad || ROL_CORTO[s.rol])}${s.cubriendo ? ' · reemplazo' : ''}</span>`).join('') || '<span class="sub">sin turno</span>'}</div></td>
           <td>${f.est}</td></tr>`).join('')}</tbody></table></div>` : '<p class="vacio">Nadie tiene turno hoy.</p>'}
     </div>`;
   $$('[data-ir]', v).forEach(b => b.onclick = () => irA(b.dataset.ir));
+  $$('[data-apr-hoy]', v).forEach(b => b.onclick = () => responder(S.ausencias.find(a => a.id === b.dataset.aprHoy), true));
+  $$('[data-ver-hoy]', v).forEach(b => b.onclick = () => verAusencia(S.ausencias.find(a => a.id === b.dataset.verHoy)));
+  $$('[data-ext]', v).forEach(b => b.onclick = () => verExterno(EXT(b.dataset.ext)));
   enlazarFichas(v);
 }
 
@@ -330,8 +396,8 @@ function vPersonal(v) {
     .sort((a, b) => (activo(b) - activo(a)) || nombreCompleto(a).localeCompare(nombreCompleto(b)));
   const linkCenso = new URL('profesor.html', location.href).href;
   v.innerHTML = `
-    <div class="cab"><div><span class="eyebrow">Censo y fichas</span><h1>Personal</h1>
-      <p class="sub">${activos().length} activos · cada profe completa su ficha desde el link del censo y vos la aprobás acá.</p></div>
+    <div class="cab"><div><span class="eyebrow">Titulares de una clase o turno cada semana</span><h1>Staff</h1>
+      <p class="sub">${activos().length} personas en el staff. Los contratados que solo cubren reemplazos van en <b>Externos</b>.</p></div>
       <div class="acciones"><button class="btn ghost" id="copiar-censo">Copiar link del censo</button><button class="btn" id="nueva">+ Cargar persona</button></div></div>
     <div class="aviso info"><div><b>Link para mandar a todo el personal</b><span class="mono" style="overflow-wrap:anywhere">${esc(linkCenso)}</span>
       <span>Entran con Google, completan su ficha y marcan las clases que dan. Después lo guardan en el celular como app.</span></div></div>
@@ -345,7 +411,8 @@ function vPersonal(v) {
       <input id="buscar" placeholder="Buscar por nombre o actividad" value="${esc(S.buscar)}" style="max-width:280px">
     </div>
     <div class="grid-3">${lista.map(p => `<button class="tarjeta" data-ficha="${esc(p.email)}" ${activo(p) ? '' : 'style="opacity:.55"'}>
-        <div class="persona"><div class="avatar">${esc(iniciales(p))}</div><div><b>${esc(nombreCompleto(p))}</b><span class="sub mono">${esc(p.telefono || '')}</span></div></div>
+        <div class="persona"><div class="avatar" style="${estiloAvatar(p.email)}">${esc(iniciales(p))}</div><div><b>${esc(nombreCompleto(p))}</b><span class="sub mono">${esc(p.telefono || '')}</span></div></div>
+        ${semanaMini(p)}${activo(p) ? estadoHoy(p) : ''}
         <div class="pie">${chipsRoles(p)} ${!activo(p) ? '<span class="pill neutro">Inactivo</span>' : ''} ${conflictos(p, S.clases).length ? '<span class="pill pendiente">Choque de horarios</span>' : ''}</div>
         <span class="sub">${resumenSemana(agenda(p, S.clases))}${(p.actividades || []).length ? ' · ' + esc(p.actividades.slice(0, 3).join(', ')) + (p.actividades.length > 3 ? '…' : '') : ''}</span>
       </button>`).join('') || '<p class="vacio">No hay personas con ese filtro.</p>'}</div>`;
@@ -364,6 +431,25 @@ function vPersonal(v) {
       await borrar('personal', p.email); toast('Ficha descartada');
     }
   });
+}
+
+// La semana de una persona en barritas (alto = horas de ese día)
+function semanaMini(p) {
+  const ag = agenda(p, S.clases), h = colorDe(p.email);
+  const hs = DIAS_LABORABLES.map(d => ag.filter(s => s.dia === d).reduce((t, s) => t + min(s.hasta) - min(s.desde), 0) / 60);
+  if (!hs.some(Boolean)) return '<span class="sub">Sin horarios cargados</span>';
+  return `<div class="sem-mini" title="Horas por día">${DIAS_LABORABLES.map((d, i) => `<div>${hs[i] ? `<i style="height:${Math.max(5, Math.min(hs[i], 10) / 10 * 30)}px;background:hsl(${h} 65% 55% / .4);border:1px solid hsl(${h} 70% 62%)"></i>` : '<i class="vacio"></i>'}<small>${DIAS_CORTOS[d][0]}</small></div>`).join('')}</div>`;
+}
+const estiloAvatar = clave => { const h = colorDe(clave); return `background:hsl(${h} 55% 40% / .35);color:hsl(${h} 75% 72%)`; };
+// Cómo está hoy: falta, trabaja (de qué hora a qué hora), vacaciones que vienen o no trabaja
+function estadoHoy(p) {
+  const h = hoy(), a = ausenteEn(p.email, h, S.ausencias);
+  if (a) return `<span class="est est-falta">${a.tipo === 'vacaciones' ? 'De vacaciones' : 'Falta hoy'}</span>`;
+  const prox = S.ausencias.filter(x => x.email === p.email && x.desde > h && x.estado !== 'rechazada').sort((x, y) => x.desde.localeCompare(y.desde))[0];
+  const bs = bloquesAgenda(agenda(p, S.clases).filter(s => s.dia === new Date().getDay()));
+  const px = prox ? ` · ${prox.tipo === 'vacaciones' ? 'vacaciones' : 'ausencia'} ${fechaCorta(prox.desde).slice(0, 5)}${prox.estado === 'pendiente' ? ' (pedido)' : ''}` : '';
+  if (bs.length) return `<span class="est est-tit">Hoy ${bs.map(b => `${b.desde}–${b.hasta}`).join(', ')}${px}</span>`;
+  return prox ? `<span class="est est-pend">${px.slice(3).replace(/^./, c => c.toUpperCase())}</span>` : '<span class="est est-libre">Hoy no trabaja</span>';
 }
 
 function htmlPendiente(p) {
@@ -597,12 +683,15 @@ function grillaSala(v) {
 
 function grillaSemana(v) {
   if (S.sede === SALA) return grillaSala(v);
+  if (S.semanaClases === undefined) S.semanaClases = iso(lunesDe(new Date())); // de entrada, la semana actual con fechas
+  if (S.semanaClases) return grillaSemanaFechas(v);
   const cs = S.clases.filter(c => c.sede === S.sede);
   const horas = [...new Set(cs.map(c => c.desde))].sort();
   const confl = new Set();
   for (const p of activos()) for (const [a, b] of conflictos(p, S.clases)) { if (a.claseId) confl.add(a.claseId); if (b.claseId) confl.add(b.claseId); }
   v.innerHTML = `<div class="acciones" style="margin-bottom:12px">${selectorSedes()}
       <span class="leyenda"><span><span class="pill sin">borde rojo</span> sin profesor</span><span><span class="pill pendiente">borde amarillo</span> choque de horario</span></span></div>
+    ${selectorSemanaClases()}
     <div class="tabla-wrap"><table class="grilla"><thead><tr><th>Hora</th>${DIAS_LABORABLES.map(d => `<th>${DIAS_CORTOS[d]}</th>`).join('')}</tr></thead><tbody>
     ${horas.map(h => `<tr><td class="hora">${h}</td>${DIAS_LABORABLES.map(d => `<td>${cs.filter(c => c.desde === h && c.dia === d).map(c => `
       <div class="celda ${!c.profesor ? 'sin-profe' : ''} ${confl.has(c.id) ? 'conflicto' : ''}">
@@ -612,12 +701,69 @@ function grillaSemana(v) {
         ${c.profesor && P(c.profesor) && c.origen !== 'profe' && !(P(c.profesor).actividades || []).includes(c.actividad) ? '<span class="nota">No figura que dé esta actividad</span>' : ''}
       </div>`).join('')}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="7"><p class="vacio">No hay clases en ${esc(S.sede)}.</p></td></tr>`}
     </tbody></table></div>`;
-  $$('[data-sede]', v).forEach(b => b.onclick = () => { S.sede = b.dataset.sede; render(); });
   $$('[data-asignar]', v).forEach(s => s.onchange = async () => {
     try { await actualizar('clases', s.dataset.asignar, { profesor: s.value, profesorNombre: s.value ? nom(s.value) : '' }); toast(s.value ? `Asignada a ${nom(s.value)}` : 'Clase sin profesor'); }
     catch { toast('No se pudo guardar', true); }
   });
   $$('[data-editar-clase]', v).forEach(b => b.onclick = () => editarClase(S.clases.find(c => c.id === b.dataset.editarClase)));
+  enlazarSemanaClases(v);
+}
+// Semana tipo (para armar la grilla) o una semana real (quién da cada clase ese día, con faltas y reemplazos)
+function selectorSemanaClases() {
+  const l = S.semanaClases ? deIso(S.semanaClases) : null;
+  return `<div class="acciones" style="margin-bottom:10px"><div class="seg" role="group" aria-label="Semana"><button data-semc="tipo" aria-pressed="${!l}">Semana tipo (armar)</button><button data-semc="-1" aria-label="Semana anterior">‹</button><button data-semc="hoy" aria-pressed="${!!l}">${l ? `Semana del ${fechaCorta(iso(l)).slice(0, 5)}` : 'Ver con fechas'}</button><button data-semc="1" aria-label="Semana siguiente">›</button></div>${l ? leyendaEstados() : ''}</div>`;
+}
+function enlazarSemanaClases(v) {
+  $$('[data-sede]', v).forEach(b => b.onclick = () => { S.sede = b.dataset.sede; render(); });
+  $$('[data-semc]', v).forEach(b => b.onclick = () => {
+    const k = b.dataset.semc, l = S.semanaClases ? deIso(S.semanaClases) : lunesDe(new Date());
+    S.semanaClases = k === 'tipo' ? null : k === 'hoy' ? (S.semanaClases || iso(lunesDe(new Date()))) : iso(sumarDias(l, +k * 7));
+    render();
+  });
+}
+// Estado de una clase en una fecha: titular, quién la cubre o si falta
+function estadoClase(c, f) {
+  if (!c.profesor) return { k: 'falta', txt: 'Sin profe' };
+  const quien = nom(c.profesor).split(' ')[0];
+  // Cuenta también el pedido sin responder: ya se busca reemplazo
+  const pedido = S.ausencias.some(a => a.email === c.profesor && a.estado === 'pendiente' && a.desde <= f && a.hasta >= f);
+  if (!ausenteEn(c.profesor, f, S.ausencias) && !pedido) return { k: 'tit', txt: quien };
+  const n = necesidadesFuturas(f, f).find(x => x.titular === c.profesor && x.desde === c.desde && (x.actividad || '') === (c.actividad || ''))
+    || { titular: c.profesor, fecha: f, dia: c.dia, desde: c.desde, hasta: c.hasta, rol: 'clases', actividad: c.actividad, sede: c.sede, claseId: c.id };
+  const rs = reemplazosDe(n, S.reemplazos);
+  if (faltaCubrir(n, S.reemplazos).length) return { k: 'falta', txt: 'Falta · ' + quien, n };
+  return { k: estadoR(rs[0]), txt: esLibre(rs[0]) ? 'No se da' : nomR(rs[0]).split(' ')[0], n, r: rs[0] };
+}
+function grillaSemanaFechas(v) {
+  const l = deIso(S.semanaClases), fechaDe = d => iso(sumarDias(l, d - 1)), h = hoy();
+  const cs = S.clases.filter(c => c.sede === S.sede);
+  const horas = [...new Set(cs.map(c => c.desde))].sort();
+  const faltan = DIAS_LABORABLES.reduce((t, d) => t + cs.filter(c => c.dia === d && estadoClase(c, fechaDe(d)).k === 'falta').length, 0);
+  v.innerHTML = `<div class="acciones" style="margin-bottom:12px">${selectorSedes()}<span class="pill ${faltan ? 'sin' : 'cubierto'}">${faltan ? `${faltan} clase(s) sin profe esta semana` : 'Esta semana está todo cubierto'}</span></div>
+    ${selectorSemanaClases()}
+    <div class="tabla-wrap"><table class="grilla"><thead><tr><th>Hora</th>${DIAS_LABORABLES.map(d => `<th class="${fechaDe(d) === h ? 'hoy' : ''}">${DIAS_CORTOS[d]} ${fechaCorta(fechaDe(d)).slice(0, 5)}</th>`).join('')}</tr></thead><tbody>
+    ${horas.map(hr => `<tr><td class="hora">${hr}</td>${DIAS_LABORABLES.map(d => `<td class="${fechaDe(d) === h ? 'hoy' : ''}">${cs.filter(c => c.desde === hr && c.dia === d).map(c => { const e = estadoClase(c, fechaDe(d));
+      return `<button class="chip-est est-${e.k}" data-clase-dia="${c.id}|${fechaDe(d)}" title="${esc(c.actividad)}"><b>${esc(c.actividad)}</b><span>${esc(e.txt)}</span></button>`; }).join('')}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="7"><p class="vacio">No hay clases en ${esc(S.sede)}.</p></td></tr>`}
+    </tbody></table></div><p class="sub">Tocá una clase para ver los datos del profe, avisar que falta o elegir quién cubre.</p>`;
+  enlazarSemanaClases(v);
+  $$('[data-clase-dia]', v).forEach(b => b.onclick = () => { const [id, f] = b.dataset.claseDia.split('|'); verClaseDia(S.clases.find(c => c.id === id), f); });
+}
+function verClaseDia(c, f) {
+  if (!c) return;
+  const e = estadoClase(c, f), p = c.profesor && P(c.profesor);
+  const m = modal(`${cabModal(c.actividad)}<p class="sub">${esc(c.sede)} · ${fechaLarga(f)} · <span class="mono">${c.desde}–${c.hasta}</span></p>
+    ${p ? `<div class="persona"><div class="avatar" style="${estiloAvatar(p.email)}">${esc(iniciales(p))}</div><div><b>${esc(nombreCompleto(p))}</b><span class="sub">Titular · <span class="mono">${esc(p.telefono || 'sin teléfono')}</span></span></div></div>` : ''}
+    <span class="est est-${e.k}" style="justify-self:start">${e.k === 'tit' ? 'Viene normal' : e.k === 'falta' ? (p ? 'Falta y nadie la cubre todavía' : 'La clase no tiene profe') : e.k === 'libre' ? 'Esa clase no se da (queda libre)' : `La cubre ${esc(nomR(e.r))}${e.r.externo ? ' (externo)' : ''}`}</span>
+    <div class="modal-pie">${p ? `<button class="btn ghost" id="cd-ficha">Ver ficha</button>` : ''}${p?.telefono ? `<a class="btn ghost" target="_blank" rel="noopener" href="${waLink(p.telefono, `Hola ${p.nombre}! `)}">WhatsApp</a>` : ''}
+      ${!p ? '<button class="btn" id="cd-asig">Asignar profe</button>' : e.k === 'tit' && f >= hoy() ? '<button class="btn" id="cd-falta">Avisó que no viene</button>' : e.n && e.k === 'falta' ? `<button class="btn" data-resolver="${regResolver(e.n)}">Buscar quién cubre</button>` : ''}</div>`);
+  $('#cd-ficha', m.el)?.addEventListener('click', () => { m.cerrar(); verFicha(p); });
+  $('#cd-asig', m.el)?.addEventListener('click', () => { m.cerrar(); editarClase(c); });
+  $('#cd-falta', m.el)?.addEventListener('click', async () => {
+    try { await agregar('ausencias', { email: p.email, nombre: nombreCompleto(p), tipo: 'ausencia', desde: f, hasta: f, motivo: 'Avisó', estado: 'aprobada', creado: AHORA, respondida: AHORA, respondidaPor: S.user.email, cargadaPorGerencia: true }); }
+    catch { return toast('No se pudo guardar', true); }
+    m.cerrar(); toast(`Anotado: ${p.nombre} no viene el ${fechaCorta(f).slice(0, 5)}. Ahora elegí quién cubre.`);
+    setTimeout(() => { const n = necesidadesFuturas(f, f).find(x => x.titular === p.email && x.desde === c.desde); if (n) resolver(n); }, 400);
+  });
 }
 
 function editarClase(c) {
@@ -708,24 +854,31 @@ function lineaDelDia(f) {
     const aus = ausenteEn(p.email, f, S.ausencias);
     const cubre = S.reemplazos.filter(r => r.fecha === f && r.reemplazo === p.email);
     if (!ag.length && !cubre.length) continue;
-    filas.push({ nombre: nombreCompleto(p), email: p.email, bs: [
-      ...ag.map(s => ({ desde: s.desde, hasta: s.hasta, tipo: aus ? 'ausente' : 'turno', clave: p.email, txt: s.actividad || ROL_CORTO[s.rol] })),
-      ...cubre.map(r => ({ desde: r.desde, hasta: r.hasta, tipo: 'cubre', clave: p.email, txt: `cubre a ${(r.titularNombre || nom(r.titular)).split(' ')[0]}` })),
+    const pedido = !aus && S.ausencias.some(a => a.email === p.email && a.estado === 'pendiente' && a.desde <= f && a.hasta >= f);
+    const necs = aus || pedido ? necesidadesFuturas(f, f).filter(n => n.titular === p.email) : [];
+    filas.push({ nombre: nombreCompleto(p), email: p.email, aus: !!aus || pedido, bs: [
+      ...ag.map(s => ({ desde: s.desde, hasta: s.hasta, tipo: aus || pedido ? 'ausente' : 'tit', clave: p.email, txt: s.actividad || ROL_CORTO[s.rol] })),
+      // Lo que falta cubrir de quien no viene, en rojo y para tocar
+      ...necs.flatMap(n => faltaCubrir(n, S.reemplazos).filter(([d, h]) => d && h).map(([d, h]) => ({ desde: d, hasta: h, tipo: 'falta', txt: 'Falta · ' + (n.actividad || ROL_CORTO[n.rol]), n }))),
+      ...cubre.map(r => ({ desde: r.desde, hasta: r.hasta, tipo: estadoR(r), clave: p.email, txt: `cubre a ${(r.titularNombre || nom(r.titular)).split(' ')[0]}` })),
     ] });
   }
   // Quien cubre y no está en el sistema
   const ext = {};
-  for (const r of S.reemplazos.filter(r => r.fecha === f && r.externo)) (ext[r.reemplazo] = ext[r.reemplazo] || { nombre: r.reemplazoNombre, email: '', bs: [] }).bs.push({ desde: r.desde, hasta: r.hasta, tipo: 'cubre', clave: r.reemplazo, txt: `cubre a ${(r.titularNombre || nom(r.titular)).split(' ')[0]}` });
+  for (const r of S.reemplazos.filter(r => r.fecha === f && r.externo && !esLibre(r))) (ext[r.reemplazo] = ext[r.reemplazo] || { nombre: r.reemplazoNombre, email: '', ext: r.reemplazo, bs: [] }).bs.push({ desde: r.desde, hasta: r.hasta, tipo: 'ext', clave: r.reemplazo, txt: `cubre a ${(r.titularNombre || nom(r.titular)).split(' ')[0]}` });
   filas.push(...Object.values(ext));
   const huecosSala = turnosSala().length ? bloquesSala(dia, f).filter(b => b.tipo === 'hueco') : [];
   if (!filas.length) return '';
   filas.sort((a, b) => Math.min(...a.bs.map(x => min(x.desde))) - Math.min(...b.bs.map(x => min(x.desde))));
   const [a0, a1] = HORARIO_CLUB[dia].map(min), largo = a1 - a0;
-  const tramo = b => { const d = Math.max(min(b.desde), a0), h = Math.min(min(b.hasta), a1); return h <= d ? '' : `<div style="left:${(d - a0) * 100 / largo}%;width:${(h - d) * 100 / largo}%;${estiloBloque(b)}" title="${esc(`${b.txt || ''} ${b.desde}–${b.hasta}`)}">${esc(b.txt || '')} ${b.desde}–${b.hasta}</div>`; };
+  const tramo = b => { const d = Math.max(min(b.desde), a0), h = Math.min(min(b.hasta), a1); if (h <= d) return '';
+    const est = ESTADOS_TURNO[b.tipo] ? `est-${b.tipo}` : '', tag = b.n ? 'button' : 'div';
+    return `<${tag} class="${est}" ${b.n ? `data-resolver="${regResolver(b.n)}"` : ''} style="left:${(d - a0) * 100 / largo}%;width:${(h - d) * 100 / largo}%;${est ? '' : estiloBloque(b)}" title="${esc(`${b.txt || ''} ${b.desde}–${b.hasta}`)}">${esc(b.txt || '')} ${b.desde}–${b.hasta}</${tag}>`; };
+  const ahora = f === hoy() ? minutosDelDia(Date.now()) : null;
   const horas = []; for (let m = Math.ceil(a0 / 60) * 60; m <= a1; m += 120) horas.push(m);
   return `<div class="linea-dia">
     <div class="ld-fila"><span></span><div class="ld-escala">${horas.map(m => `<span style="left:${(m - a0) * 100 / largo}%">${hhmm(m).slice(0, 2)}</span>`).join('')}</div></div>
-    ${filas.map(x => `<div class="ld-fila"><button class="btn sm ghost" ${x.email ? `data-ficha="${esc(x.email)}"` : ''}>${esc(x.nombre.split(' ')[0])}</button><div class="rem-barra">${x.bs.map(tramo).join('')}</div></div>`).join('')}
+    ${filas.map(x => `<div class="ld-fila"><button class="btn sm ghost ${x.ext ? 'ld-ext' : ''}" ${x.email ? `data-ficha="${esc(x.email)}"` : x.ext ? `data-ext="${esc(x.ext)}"` : ''} ${x.aus ? 'style="text-decoration:line-through;color:var(--muted)"' : ''}>${esc(x.nombre.split(' ')[0])}</button><div class="rem-barra">${ahora != null && ahora > a0 && ahora < a1 ? `<i class="ahora" style="left:${(ahora - a0) * 100 / largo}%"></i>` : ''}${x.bs.map(tramo).join('')}</div></div>`).join('')}
     ${huecosSala.length ? `<div class="ld-fila"><span style="color:var(--accent);font-size:.78rem;font-weight:700">Sala sin nadie</span><div class="rem-barra">${huecosSala.map(b => tramo({ ...b, txt: '' })).join('')}</div></div>` : ''}
   </div>`;
 }
@@ -748,6 +901,7 @@ function verDia(f) {
     }).join('')}</div>` : ''}
     <div class="modal-pie"><button class="btn ghost" data-cerrar>Cerrar</button></div>`, { ancho: true });
   $$('[data-ficha]', m.el).forEach(b => b.onclick = () => { m.cerrar(); verFicha(P(b.dataset.ficha)); });
+  $$('[data-ext]', m.el).forEach(b => b.onclick = () => { m.cerrar(); verExterno(EXT(b.dataset.ext)); });
 }
 
 // ============================================================ VACACIONES Y AUSENCIAS
@@ -760,9 +914,11 @@ function vVacaciones(v) {
       <div class="acciones"><button class="btn" id="cargar-aus">+ Cargar ausencia</button></div></div>
     ${pend.length ? `<div class="panel"><h3>Pedidos por responder (${pend.length})</h3><div class="lista">${pend.map(a => {
       const necs = necesidades(a, P(a.email), S.clases);
+      const minNec = necs.filter(n => !n.generico && n.desde && n.hasta).reduce((t, n) => t + min(n.hasta) - min(n.desde), 0);
       const choques = S.ausencias.filter(x => x.id !== a.id && x.estado === 'aprobada' && x.desde <= a.hasta && x.hasta >= a.desde);
       return `<div class="item"><div><b>${esc(a.nombre || nom(a.email))} · ${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'}</b>
-        <span class="sub"><span class="mono">${rangoTexto(a.desde, a.hasta)}</span> · ${textoDias(a.desde, a.hasta, P(a.email), S.clases)} · ${necs.length} turnos/clases a cubrir${a.motivo ? ' · ' + esc(a.motivo) : ''}</span>
+        <span class="sub"><span class="mono">${rangoTexto(a.desde, a.hasta)}</span>${a.motivo ? ' · ' + esc(a.motivo) : ''}</span>
+        <span class="impacto"><span class="i-dias">${textoDias(a.desde, a.hasta, P(a.email), S.clases)}</span> · <span class="i-horas">${minNec ? `deja ${horasTxt(minNec)} para cubrir` : necs.length ? `${necs.length} turno(s) a confirmar` : 'no deja nada para cubrir'}</span></span>
         ${choques.length ? `<span class="sub" style="color:var(--warn)">Esos días también falta: ${esc(choques.map(x => x.nombre || nom(x.email)).join(', '))}</span>` : ''}</div>
         <div class="acciones"><button class="btn sm ghost" data-ver-aus="${a.id}">Ver detalle</button><button class="btn sm ok" data-aprobar-aus="${a.id}">Aprobar</button><button class="btn sm ghost" data-rechazar-aus="${a.id}">Rechazar</button></div></div>`;
     }).join('')}</div></div>` : ''}
@@ -950,6 +1106,7 @@ function cargarAusencia(email = '', pre = {}) {
 
 // ============================================================ REEMPLAZOS
 function vReemplazos(v) {
+  if (S.remVista === 'hist') return vHistorialRem(v);
   const h = hoy();
   const aus = S.ausencias.filter(a => (a.estado === 'aprobada' || a.estado === 'pendiente') && a.hasta >= h).sort((a, b) => a.desde.localeCompare(b.desde));
   let bloques = aus.map(a => {
@@ -961,7 +1118,8 @@ function vReemplazos(v) {
   const total = bloques.reduce((t, b) => t + b.necs.filter(n => !n.r).length, 0);
   v.innerHTML = `<div class="cab"><div><span class="eyebrow">Detección automática</span><h1>Reemplazos</h1>
       <p class="sub">${total ? `${total} turnos o clases sin cubrir.` : 'Todo cubierto.'} El sistema propone a quien tiene el mismo rol, da esa actividad, no está de vacaciones y está libre en ese horario.</p></div>
-      <div class="seg" role="group" aria-label="Filtro"><button data-f="1" aria-pressed="${S.soloSinCubrir}">Sin cubrir</button><button data-f="0" aria-pressed="${!S.soloSinCubrir}">Todos</button></div></div>
+      <div class="acciones">${tabsRem()}<div class="seg" role="group" aria-label="Filtro"><button data-f="1" aria-pressed="${S.soloSinCubrir}">Sin cubrir</button><button data-f="0" aria-pressed="${!S.soloSinCubrir}">Todos</button></div></div></div>
+    <div class="acciones">${leyendaEstados()}</div>
     ${bloques.length ? bloques.map(({ a, necs, mostrar }) => {
       const p = P(a.email);
       return `<div class="panel">
@@ -974,10 +1132,54 @@ function vReemplazos(v) {
     ${sinNecesidades.length ? `<div class="panel"><h3>Pedidos sin reemplazos para buscar</h3>
       ${sinNecesidades.map(a => `<div style="display:grid;gap:6px"><b>${esc(a.nombre || nom(a.email))} · <span class="mono">${rangoTexto(a.desde, a.hasta)}</span></b>${motivoSinReemplazo(a, P(a.email))}</div>`).join('')}</div>` : ''}`;
   $$('[data-f]', v).forEach(b => b.onclick = () => { S.soloSinCubrir = b.dataset.f === '1'; render(); });
-  $$('[data-asignar-r]', v).forEach(b => b.onclick = () => asignar(JSON.parse(b.dataset.n), b.dataset.asignarR));
-  $$('[data-quitar-r]', v).forEach(b => b.onclick = async () => { await borrar('reemplazos', b.dataset.quitarR); toast('Reemplazo quitado'); });
+  enlazarTabsRem(v);
+  enlazarNecesidades(v);
+}
+const tabsRem = () => `<div class="seg" role="group" aria-label="Vista"><button data-remv="cubrir" aria-pressed="${S.remVista !== 'hist'}">Por cubrir${sinCubrir14().length ? ` <span class="cuenta">${sinCubrir14().length}</span>` : ''}</button><button data-remv="hist" aria-pressed="${S.remVista === 'hist'}">Historial: quién cubrió</button></div>`;
+const enlazarTabsRem = v => $$('[data-remv]', v).forEach(b => b.onclick = () => { S.remVista = b.dataset.remv; render(); });
+// Botones de las tarjetas de "falta cubrir" (en Reemplazos y en el panel Resolver). "listo" se llama al terminar.
+function enlazarNecesidades(v, listo) {
+  const ok = () => listo?.();
+  $$('[data-asignar-r]', v).forEach(b => b.onclick = async () => { await asignar(JSON.parse(b.dataset.n), b.dataset.asignarR); ok(); });
+  $$('[data-asignar-ext]', v).forEach(b => b.onclick = async () => { await asignarExterno(JSON.parse(b.dataset.n), b.dataset.asignarExt); ok(); });
+  $$('[data-libre]', v).forEach(b => b.onclick = async () => { await asignarExterno(JSON.parse(b.dataset.libre), '__libre'); ok(); });
+  $$('[data-quitar-r]', v).forEach(b => b.onclick = async () => { await borrar('reemplazos', b.dataset.quitarR); toast('Reemplazo quitado'); ok(); });
   $$('[data-mas]', v).forEach(b => b.onclick = () => { b.closest('.nec').querySelectorAll('.cand[hidden]').forEach(c => { c.hidden = false; }); b.remove(); });
-  $$('[data-manual]', v).forEach(b => b.onclick = () => asignarManual(JSON.parse(b.dataset.manual)));
+  $$('[data-manual]', v).forEach(b => b.onclick = () => { ok(); asignarManual(JSON.parse(b.dataset.manual)); });
+  $$('[data-ext]', v).forEach(b => b.onclick = () => { ok(); verExterno(EXT(b.dataset.ext)); });
+  $$('[data-ficha]', v).forEach(b => b.onclick = () => { ok(); verFicha(P(b.dataset.ficha)); });
+}
+// Un externo (o "queda libre") cubre lo que falta del turno
+async function asignarExterno(n, id) {
+  const piezas = faltaCubrir(n, S.reemplazos);
+  if (!piezas.length) return toast('Ese turno ya está cubierto');
+  const x = id === '__libre' ? { id: 'externo:queda-libre', nombre: 'Queda libre (sin profe)', tel: '' } : EXT(id);
+  if (!x) return toast('No encontré a esa persona en Externos', true);
+  const quien = { reemplazo: x.id, reemplazoNombre: x.nombre, reemplazoTel: x.tel || '', externo: true };
+  try { await lote(piezas.map(([d, h]) => ({ c: 'reemplazos', id: Math.random().toString(36).slice(2, 14), data: docReemplazo(n, quien, d || n.desde, h || n.hasta) }))); }
+  catch { return toast('No se pudo asignar', true); }
+  toast(id === '__libre' ? `${piezas.map(p => p.join('–')).join(', ')} queda sin profe a propósito` : `${x.nombre} (externo) cubre ${queCubre(n)} el ${fechaCorta(n.fecha).slice(0, 5)}`);
+}
+// Historial: quién cubrió, a quién, cuándo y cuántas horas (staff y externos)
+function vHistorialRem(v) {
+  const meses = [...new Set([mesDe(new Date()), ...S.reemplazos.map(r => r.fecha.slice(0, 7))])].sort().reverse();
+  if (!meses.includes(S.histMes)) S.histMes = meses[0];
+  const xs = S.reemplazos.filter(r => r.fecha.slice(0, 7) === S.histMes && !esLibre(r) && (S.histTipo === 'todos' || (S.histTipo === 'ext') === !!r.externo))
+    .sort((a, b) => b.fecha.localeCompare(a.fecha) || a.desde.localeCompare(b.desde));
+  const por = {};
+  for (const r of xs) { const k = r.reemplazo; por[k] = por[k] || { k, nombre: nomR(r), ext: !!r.externo, m: 0, n: 0 }; por[k].m += minR(r); por[k].n++; }
+  const nomMes = k => `${MESES[+k.slice(5) - 1]} ${k.slice(0, 4)}`;
+  v.innerHTML = `<div class="cab"><div><span class="eyebrow">Todo queda guardado</span><h1>Reemplazos</h1><p class="sub">Quién cubrió a quién, cuándo y cuántas horas. Sirve para pagarle a los externos y para ver quién ayuda más.</p></div><div class="acciones">${tabsRem()}</div></div>
+    <div class="acciones"><select id="hr-mes" style="width:auto">${meses.map(k => `<option value="${k}" ${k === S.histMes ? 'selected' : ''}>${nomMes(k)}</option>`).join('')}</select>
+      <div class="seg" role="group" aria-label="Quiénes">${[['todos', 'Todos'], ['stf', 'Staff'], ['ext', 'Externos']].map(([k, t]) => `<button data-htipo="${k}" aria-pressed="${S.histTipo === k}">${t}</button>`).join('')}</div></div>
+    ${Object.keys(por).length ? `<div class="kpis">${Object.values(por).sort((a, b) => b.m - a.m).map(x => `<button class="kpi ${x.ext ? 'kpi-ext' : ''}" ${x.ext ? `data-ext="${esc(x.k)}"` : `data-ficha="${esc(x.k)}"`}><b>${horasTxt(x.m)}</b><span>${esc(x.nombre)}${x.ext ? ' · externo' : ''} · ${x.n} ${x.n === 1 ? 'vez' : 'veces'}</span></button>`).join('')}</div>` : ''}
+    <div class="panel">${xs.length ? `<div class="lista">${xs.map(r => `<div class="item fila-est ${estadoR(r)}"><div><b>${esc(nomR(r))} cubrió a ${esc((r.titularNombre || nom(r.titular)))}</b>
+      <span class="sub">${fechaCorta(r.fecha)} · ${esc(queCubre(r))} · <span class="mono">${r.desde}–${r.hasta}</span> · ${horasTxt(minR(r))}</span></div>
+      <div class="acciones">${r.fecha > hoy() ? '<span class="pill neutro">programado</span>' : ''}${r.externo ? '<span class="pill ext">externo</span>' : ''}</div></div>`).join('')}</div>` : `<p class="vacio">No hay reemplazos en ${nomMes(S.histMes)}.</p>`}</div>`;
+  enlazarTabsRem(v);
+  $('#hr-mes').onchange = e => { S.histMes = e.target.value; render(); };
+  $$('[data-htipo]', v).forEach(b => b.onclick = () => { S.histTipo = b.dataset.htipo; render(); });
+  $$('[data-ext]', v).forEach(b => b.onclick = () => verExterno(EXT(b.dataset.ext)));
   enlazarFichas(v);
 }
 
@@ -990,20 +1192,26 @@ function htmlNecesidad(n) {
   const partes = rs.map(r => {
     const q = !r.externo && P(r.reemplazo), tel = q?.telefono || r.reemplazoTel;
     const parcial = rs.length > 1 || falta.length || r.desde !== n.desde || r.hasta !== n.hasta;
-    return `<div class="acciones"><span class="pill cubierto">${parcial ? `<span class="mono">${r.desde}–${r.hasta}</span> · ` : ''}Cubre ${esc(nomR(r))}${r.externo ? ' (no está en el sistema)' : ''}</span>
+    return `<div class="acciones"><span class="pill ${esLibre(r) ? 'neutro' : r.externo ? 'ext' : 'cubierto'}">${parcial ? `<span class="mono">${r.desde}–${r.hasta}</span> · ` : ''}${esLibre(r) ? 'Queda libre (sin profe)' : `Cubre ${esc(nomR(r))}${r.externo ? ' · externo' : ''}`}</span>
       ${tel ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(tel, textoReemplazo({ ...n, desde: r.desde, hasta: r.hasta }, q || { nombre: r.reemplazoNombre.split(' ')[0] }))}">WhatsApp</a>` : ''}
       ${q ? `<button class="btn sm ghost" data-ficha="${esc(r.reemplazo)}">Ficha</button>` : ''}<button class="btn sm ghost" data-quitar-r="${r.id}">Quitar</button></div>`;
   }).join('');
   // Barra del turno: cada parte con el color de quien la cubre, lo que falta en rojo
   const largo = min(n.hasta) - min(n.desde);
-  const tramo = (d, h, estilo, txt) => `<div style="left:${(min(d) - min(n.desde)) * 100 / largo}%;width:${(min(h) - min(d)) * 100 / largo}%;${estilo}" title="${esc(txt)}">${esc(txt)}</div>`;
-  const barra = n.generico || !largo ? '' : `<div class="rem-barra">${rs.map(r => tramo(r.desde, r.hasta, estiloPersona(r.reemplazo), `${nomR(r).split(' ')[0]} ${r.desde}–${r.hasta}`)).join('')}
-    ${falta.map(([d, h]) => tramo(d, h, 'background:color-mix(in srgb,var(--accent) 22%,transparent);border:1px dashed var(--accent);color:var(--accent)', `Falta ${d}–${h}`)).join('')}</div>`;
+  const tramo = (d, h, estilo, txt, k) => `<div class="${k ? 'est-' + k : ''}" style="left:${(min(d) - min(n.desde)) * 100 / largo}%;width:${(min(h) - min(d)) * 100 / largo}%;${estilo}" title="${esc(txt)}">${esc(txt)}</div>`;
+  const barra = n.generico || !largo ? '' : `<div class="rem-barra">${rs.map(r => tramo(r.desde, r.hasta, '', `${esLibre(r) ? 'Queda libre' : nomR(r).split(' ')[0]} ${r.desde}–${r.hasta}`, estadoR(r))).join('')}
+    ${falta.map(([d, h]) => tramo(d, h, '', `Falta ${d}–${h}`, 'falta')).join('')}</div>`;
   if (!falta.length) return `<div class="nec">${cab}${barra}${partes}</div>`;
   // Si ya lo cubren en parte, se buscan libres para lo que falta (no para el turno entero)
   const cs = candidatos(rs.length ? { ...n, desde: falta[0][0], hasta: falta[0][1] } : n, S.personal, S.ausencias, S.reemplazos, S.clases);
+  const [fd, fh] = falta[0][0] ? falta[0] : [n.desde || '00:00', n.hasta || '23:59'];
+  const exts = externos().filter(x => (x.acts || []).includes(queAct(n)) && libreExt(x, n.fecha, fd, fh));
+  const htmlExt = exts.length ? `<span class="eyebrow" style="color:var(--ext)">Externos que dan ${esc(queAct(n))} (no son staff)</span><div class="cands">${exts.map(x => `<div class="cand cand-ext">
+      <div class="persona"><div class="avatar av-ext">${esc(x.nombre.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase())}</div><div><b>${esc(x.nombre)}</b><span class="sub mono">${esc(x.tel || 'sin teléfono')}</span>${x.disp ? `<span class="sub">${esc(x.disp)}</span>` : ''}</div></div>
+      <div class="acciones">${x.tel ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(x.tel, textoReemplazo(n, { nombre: x.nombre.split(' ')[0] }))}">WhatsApp</a>` : ''}<button class="btn sm ghost" data-ext="${esc(x.id)}">Ficha</button>
+        <button class="btn sm ext" data-asignar-ext="${esc(x.id)}" data-n="${nd}">Asignar</button></div></div>`).join('')}</div>` : '';
   return `<div class="nec">${cab}${barra}${partes}
-    ${cs.length ? `<div class="cands">${cs.map(({ p, carga, disponible }, i) => `<div class="cand" ${i >= 3 ? 'hidden' : ''}>
+    ${cs.length ? `<span class="eyebrow" style="color:var(--ok)">Staff libre</span><div class="cands">${cs.map(({ p, carga, disponible }, i) => `<div class="cand" ${i >= 3 ? 'hidden' : ''}>
         <div class="persona"><div class="avatar">${esc(iniciales(p))}</div><div><b>${esc(nombreCompleto(p))}</b><span class="sub mono">${esc(p.telefono || 'sin teléfono')}</span><span class="sub">${esc(p.email)}</span></div></div>
         <span class="sub">${disponible ? '<span class="pill aprobada">Dijo que puede cubrir en ese horario</span> ' : ''}${carga ? `Ya cubre ${carga} este mes` : 'Sin reemplazos este mes'}</span>
         <div class="acciones">
@@ -1012,8 +1220,9 @@ function htmlNecesidad(n) {
           <button class="btn sm ghost" data-ficha="${esc(p.email)}">Ficha</button>
           <button class="btn sm" data-asignar-r="${esc(p.email)}" data-n="${nd}">${rs.length ? 'Asignar lo que falta' : 'Asignar'}</button></div></div>`).join('')}</div>
       ${cs.length > 3 ? `<button class="btn sm ghost" data-mas style="justify-self:start">Ver ${cs.length - 3} más</button>` : ''}`
-    : `<div class="aviso mal"><div><b>Nadie disponible con ese perfil.</b><span>No hay ${n.rol === 'clases' ? `profes que den ${esc(n.actividad)}` : esc(ROLES[n.rol].toLowerCase())} libres en ese horario.</span></div></div>`}
-    <button class="btn sm ghost" data-manual="${nd}" style="justify-self:start">Cubrir por partes u otra persona</button></div>`;
+    : `<div class="aviso ${exts.length ? '' : 'mal'}"><div><b>Nadie del staff libre con ese perfil.</b><span>No hay ${n.rol === 'clases' ? `profes que den ${esc(n.actividad)}` : esc(ROLES[n.rol].toLowerCase())} del staff libres en ese horario.${exts.length ? ' Abajo están los externos.' : ' Podés cargar a otra persona (queda guardada en Externos).'}</span></div></div>`}
+    ${htmlExt}
+    <div class="acciones"><button class="btn sm ghost" data-manual="${nd}">Cubrir por partes u otra persona</button><button class="btn sm ghost" data-libre="${nd}">Dejar sin profe</button></div></div>`;
 }
 
 // Guarda un reemplazo de una parte del turno (por defecto, el turno entero)
@@ -1055,7 +1264,7 @@ function asignarManual(n) {
     <label>Quién cubre<select id="m-p">${todos.map(p => {
       const ocupado = agenda(p, S.clases).some(s => s.dia === n.dia && seSolapan(s.desde, s.hasta, n.desde, n.hasta));
       return `<option value="${esc(p.email)}">${esc(nombreCompleto(p))} · ${(p.roles || []).map(r => ROL_CORTO[r]).join('/')}${ocupado ? ' · ocupado en ese horario' : ''}</option>`;
-    }).join('')}<option value="__externo">+ Otra persona (no está en el sistema)</option></select></label>
+    }).join('')}${externos().length ? `<optgroup label="Externos (no son staff)">${externos().map(x => `<option value="ext|${esc(x.id)}">${esc(x.nombre)} · externo${(x.acts || []).length ? ' · ' + esc(x.acts.join('/')) : ''}</option>`).join('')}</optgroup>` : ''}<option value="__externo">+ Otra persona (queda guardada en Externos)</option></select></label>
     <div class="fila" id="m-ext" hidden><label>Nombre y apellido<input id="m-nombre" placeholder="Ej. Cristian Gómez"></label><label>Teléfono (opcional)<input id="m-tel" inputmode="tel" placeholder="11 5555-1234"></label></div>
     <div class="fila"><label>Desde<input id="m-desde" type="time" step="900" value="${d0}"></label><label>Hasta<input id="m-hasta" type="time" step="900" value="${h0}"></label></div>
     <p class="sub">Si lo cubren entre varios, asigná a cada uno su parte. Por ejemplo, Franco de 12:00 a 13:00 y después otra persona de 13:00 a 17:00.</p></div>
@@ -1072,7 +1281,11 @@ function asignarManual(n) {
     if (sel.value === '__externo') {
       const nombre = $('#m-nombre', m.el).value.trim();
       if (!nombre) return toast('Escribí el nombre de quien cubre', true);
-      quien = { reemplazo: 'externo:' + nombre.toLowerCase().replace(/\s+/g, '-'), reemplazoNombre: nombre, reemplazoTel: $('#m-tel', m.el).value.trim(), externo: true };
+      quien = { reemplazo: slugExt(nombre), reemplazoNombre: nombre, reemplazoTel: $('#m-tel', m.el).value.trim(), externo: true };
+      if (!EXT(quien.reemplazo)) guardarExternos([...todosExt(), { id: quien.reemplazo, nombre, tel: quien.reemplazoTel, acts: [queAct(n)].filter(Boolean), disp: '' }]).catch(() => {});
+    } else if (sel.value.startsWith('ext|')) {
+      const x = EXT(sel.value.slice(4));
+      quien = { reemplazo: x.id, reemplazoNombre: x.nombre, reemplazoTel: x.tel || '', externo: true };
     } else {
       if (!sel.value) return;
       quien = { reemplazo: sel.value, reemplazoNombre: nom(sel.value) };
@@ -1098,6 +1311,7 @@ function vAsistencia(v) {
   v.innerHTML = `<div class="cab"><div><span class="eyebrow">Registro del QR · cualquier mes, pasado o actual</span><h1>Asistencia</h1></div>
       <div class="acciones"><label style="flex-direction:row">Mes<input type="month" id="mes" value="${S.mesAsis}" style="width:auto"></label>
         <button class="btn ghost" id="csv">Descargar CSV</button><button class="btn" id="manual">+ Fichaje manual</button></div></div>
+    ${semanaAsistencia()}
     <div class="panel"><h3>Resumen de ${MESES[+S.mesAsis.slice(5) - 1]}</h3>
       ${res.length ? `<div class="tabla-wrap"><table><thead><tr><th>Persona</th><th class="num">Días de trabajo</th><th class="num">Horas</th><th class="num">Llegadas tarde</th><th class="num">Faltas sin aviso</th><th class="num">Sin salida</th></tr></thead><tbody>
       ${res.map(r => `<tr><td><button class="btn sm ghost" data-filtrar="${esc(r.email)}">${esc(r.nombre)}</button></td><td class="num mono">${r.dias}</td><td class="num mono">${fmtMin(r.minutos)}</td>
@@ -1114,6 +1328,7 @@ function vAsistencia(v) {
         <td class="mono">${j.salida ? horaDe(j.salida.ts) : '<span class="pill pendiente">sin salida</span>'}${j.salida?.manual ? ' <span class="pill neutro">manual</span>' : ''}</td>
         <td class="num mono">${j.minutos != null ? fmtMin(j.minutos) : '—'}</td></tr>`).join('')}</tbody></table></div>` : '<p class="vacio">Sin registros.</p>'}</div>`;
   $('#mes').onchange = e => { if (!e.target.value) return; S.mesAsis = e.target.value; suscribirMes(); render(); };
+  $$('[data-dia-asis]', v).forEach(b => b.onclick = () => { const [e, f, k] = b.dataset.diaAsis.split('|'); diaAsistencia(e, f, k); });
   $$('[data-filtrar]', v).forEach(b => b.onclick = () => { S.personaAsis = b.dataset.filtrar; render(); });
   $('#todos')?.addEventListener('click', () => { S.personaAsis = ''; render(); });
   $('#manual').onclick = () => fichajeManual();
@@ -1133,6 +1348,47 @@ function vAsistencia(v) {
   };
 }
 
+// Esta semana: un cuadrito por persona y por día. Verde vino, amarillo tarde, rojo faltó sin avisar, gris avisó.
+function estadoAsis(p, f) {
+  const h = hoy(), d = deIso(f).getDay();
+  const ag = agenda(p, S.clases).filter(s => s.dia === d);
+  if (!ag.length) return { k: 'no' };
+  if (f > h) return { k: 'fut' };
+  if (ausenteEn(p.email, f, S.ausencias)) return { k: 'aviso', txt: 'avisó' };
+  const ini = Math.min(...ag.map(s => min(s.desde)));
+  const fs = [...S.fichajes, ...S.fichajesHoy].filter(x => x.email === p.email && x.fecha === f && x.tipo === 'entrada').sort((a, b) => ms(a.ts) - ms(b.ts));
+  if (fs.length) { const t = minutosDelDia(fs[0].ts) - ini; return { k: t > TOLERANCIA_TARDE ? 'tarde' : 'ok', txt: horaDe(fs[0].ts), t }; }
+  if (f === h && minutosDelDia(Date.now()) <= ini + TOLERANCIA_TARDE) return { k: 'pend', txt: 'entra ' + hhmm(ini) };
+  if (f !== h && f.slice(0, 7) !== S.mesAsis) return { k: 'nd' };
+  return { k: 'falta', txt: f === h ? 'no fichó' : 'faltó' };
+}
+function semanaAsistencia() {
+  const l = lunesDe(new Date()), dias = DIAS_LABORABLES.map(d => iso(sumarDias(l, d - 1))), h = hoy();
+  const gente = activos().filter(p => agenda(p, S.clases).length).sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b)));
+  const est = Object.fromEntries(gente.map(p => [p.email, dias.map(f => estadoAsis(p, f))]));
+  // Las faltas se cuentan hasta ayer (hoy todavía pueden llegar)
+  const cuenta = k => Object.values(est).flatMap(xs => xs.filter((e, i) => e.k === k && (k !== 'falta' || dias[i] < h))).length;
+  return `<div class="kpis"><div class="kpi ok"><b>${S.fichajesHoy.filter(f => f.tipo === 'entrada').length ? new Set(S.fichajesHoy.filter(f => f.tipo === 'entrada').map(f => f.email)).size : 0}</b><span>ficharon hoy</span></div>
+      <div class="kpi ${cuenta('tarde') ? 'aviso-k' : ''}"><b>${cuenta('tarde')}</b><span>llegadas tarde esta semana</span></div><div class="kpi ${cuenta('falta') ? 'alerta' : 'ok'}"><b>${cuenta('falta')}</b><span>faltas sin aviso esta semana</span></div></div>
+    <div class="panel"><div class="cab"><h3>Esta semana</h3><span class="leyenda"><span><i class="sw est-tit"></i>vino</span><span><i class="sw est-pend"></i>tarde</span><span><i class="sw est-falta"></i>faltó sin avisar</span><span><i class="sw est-libre"></i>avisó</span></span></div>
+    <div class="tabla-wrap"><div class="asis-sem"><span></span>${dias.map(f => `<span class="h ${f === h ? 'hoy' : ''}">${DIAS_CORTOS[deIso(f).getDay()]} ${fechaCorta(f).slice(0, 5)}</span>`).join('')}
+      ${gente.map(p => `<button class="btn sm ghost" data-ficha="${esc(p.email)}">${esc(nombreCompleto(p).split(' ').slice(0, 2).join(' '))}</button>${est[p.email].map((e, i) => e.k === 'no' || e.k === 'fut' || e.k === 'nd' ? `<span class="dt dt-${e.k}"></span>`
+        : `<button class="dt dt-${e.k}" data-dia-asis="${esc(p.email)}|${dias[i]}|${e.k}" title="${esc(e.txt || '')}">${e.k === 'ok' ? '✓' : esc(e.txt || '')}</button>`).join('')}`).join('')}</div></div>
+    <span class="sub">Tocá un cuadrito rojo para justificar la falta o cargar el fichaje.</span></div>`;
+}
+async function diaAsistencia(email, f, k) {
+  const p = P(email); if (!p) return;
+  const e = estadoAsis(p, f);
+  const m = modal(`${cabModal(nombreCompleto(p))}<p class="sub">${fechaLarga(f)}</p>
+    <span class="est est-${e.k === 'ok' ? 'tit' : e.k === 'tarde' ? 'pend' : e.k === 'falta' ? 'falta' : 'libre'}" style="justify-self:start">${e.k === 'ok' ? `Entró ${e.txt}` : e.k === 'tarde' ? `Llegó ${e.txt}, ${e.t} minutos tarde` : e.k === 'falta' ? (f === hoy() ? 'Todavía no fichó hoy' : 'No vino y no avisó') : e.k === 'aviso' ? 'Avisó que no venía' : esc(e.txt || '')}</span>
+    <div class="modal-pie"><button class="btn ghost" data-cerrar>Cerrar</button>${e.k === 'falta' ? '<button class="btn ghost" id="da-fich">Vino, se olvidó de fichar</button><button class="btn ok" id="da-just">Avisó (justificar)</button>' : ''}</div>`);
+  $('#da-just', m.el)?.addEventListener('click', async () => {
+    await agregar('ausencias', { email, nombre: nombreCompleto(p), tipo: 'ausencia', desde: f, hasta: f, motivo: 'Justificada por gerencia', estado: 'aprobada', creado: AHORA, respondida: AHORA, respondidaPor: S.user.email, cargadaPorGerencia: true });
+    m.cerrar(); toast('Falta justificada');
+  });
+  $('#da-fich', m.el)?.addEventListener('click', () => { m.cerrar(); const ag = agenda(p, S.clases).filter(s => s.dia === deIso(f).getDay()); fichajeManual({ email, fecha: f, hora: ag.map(s => s.desde).sort()[0], tipo: 'entrada' }); });
+}
+
 function fichajeManual(pre = {}) {
   const m = modal(`${cabModal('Fichaje manual')}<p class="sub">Para cuando alguien se olvidó de fichar. Queda marcado como manual.</p>
     <div class="form"><label>Persona<select id="fm-p">${activos().sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b))).map(p => `<option value="${esc(p.email)}">${esc(nombreCompleto(p))}</option>`).join('')}</select></label>
@@ -1150,6 +1406,73 @@ function fichajeManual(pre = {}) {
     const ts = new Date(y, mo - 1, d, hh, mm);
     await agregar('fichajes', { email: e, nombre: nom(e), fecha: f, mes: f.slice(0, 7), tipo: $('#fm-t', m.el).value, ts, token: 'manual', manual: true, cargadoPor: S.user.email, dispositivo: 'gerencia' });
     m.cerrar(); toast('Fichaje cargado');
+  };
+}
+
+// ============================================================ EXTERNOS
+// Contratados que no son staff: no tienen ficha, censo, asistencia ni vacaciones. Solo cubren reemplazos.
+function vExternos(v) {
+  const xs = externos(), mes = mesDe(new Date()), nomMes = MESES[+mes.slice(5) - 1];
+  const q = S.buscar.toLowerCase();
+  const lista = xs.filter(x => !q || `${x.nombre} ${(x.acts || []).join(' ')}`.toLowerCase().includes(q));
+  v.innerHTML = `<div class="cab"><div><span class="eyebrow">Carpeta aparte · no son staff</span><h1>Externos</h1>
+      <p class="sub">Profes contratados que solo cubren reemplazos. Aparecen al buscar quién cubre, siempre después del staff y en violeta. No cuentan en el censo, la asistencia ni las vacaciones.</p></div>
+      <div class="acciones"><button class="btn ext" id="nuevo-ext">+ Agregar externo</button></div></div>
+    <div class="acciones"><input id="buscar" placeholder="Buscar por nombre o actividad" value="${esc(S.buscar)}" style="max-width:280px"></div>
+    ${lista.length ? `<div class="grid-3">${lista.map(x => { const rs = S.reemplazos.filter(r => r.reemplazo === x.id && r.fecha.slice(0, 7) === mes), m = rs.reduce((t, r) => t + minR(r), 0);
+      return `<button class="tarjeta tarjeta-ext" data-ext="${esc(x.id)}"><div class="persona"><div class="avatar av-ext">${esc(x.nombre.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase())}</div><div><b>${esc(x.nombre)}</b><span class="sub mono">${esc(x.tel || 'sin teléfono')}</span></div></div>
+        <div class="pie"><span class="pill ext">Externo</span>${(x.acts || []).map(a => `<span class="pill neutro">${esc(a)}</span>`).join('')}</div>
+        ${x.disp ? `<span class="sub">${esc(x.disp)}</span>` : ''}
+        <span class="est est-ext">${rs.length ? `${rs.length} ${rs.length === 1 ? 'reemplazo' : 'reemplazos'} · ${horasTxt(m)} en ${nomMes}` : `Sin reemplazos en ${nomMes}`}</span>
+        ${x.auto ? '<span class="sub">Se sumó solo porque cubrió un reemplazo. Tocá para completar sus datos.</span>' : ''}</button>`; }).join('')}</div>`
+    : `<div class="vacio-grande"><b>${q ? 'No encontré a nadie con eso.' : 'Todavía no hay externos.'}</b><span>Tocá "+ Agregar externo" para guardar a un profe contratado. También se suman solos cuando cargás a "otra persona" en un reemplazo.</span></div>`}`;
+  $('#nuevo-ext').onclick = () => editarExterno();
+  $('#buscar').oninput = e => { S.buscar = e.target.value; clearTimeout(vExternos.t); vExternos.t = setTimeout(() => { render(); const i = $('#buscar'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); };
+  $$('[data-ext]', v).forEach(b => b.onclick = () => verExterno(EXT(b.dataset.ext)));
+}
+function verExterno(x) {
+  if (!x) return toast('No encontré a esa persona', true);
+  const rs = S.reemplazos.filter(r => r.reemplazo === x.id).sort((a, b) => b.fecha.localeCompare(a.fecha) || a.desde.localeCompare(b.desde));
+  const meses = [...new Set([mesDe(new Date()), ...rs.map(r => r.fecha.slice(0, 7))])].sort().reverse();
+  let mes = meses[0];
+  const cuerpo = () => { const del = rs.filter(r => r.fecha.slice(0, 7) === mes), m = del.reduce((t, r) => t + minR(r), 0);
+    return `<div class="seg" role="group" aria-label="Mes">${meses.map(k => `<button data-xm="${k}" aria-pressed="${k === mes}">${MESES[+k.slice(5) - 1]}</button>`).join('')}</div>
+      <div class="kpis"><div class="kpi kpi-ext"><b>${del.length}</b><span>reemplazos</span></div><div class="kpi kpi-ext"><b>${horasTxt(m)}</b><span>para pagar</span></div><div class="kpi"><b>${new Set(del.map(r => r.titular)).size}</b><span>personas cubiertas</span></div></div>
+      ${del.length ? `<div class="lista">${del.map(r => `<div class="item"><span><span class="mono">${fechaCorta(r.fecha).slice(0, 5)}</span> · cubrió a <b>${esc((r.titularNombre || nom(r.titular)).split(' ')[0])}</b> · ${esc(queCubre(r))}</span><span class="mono">${r.desde}–${r.hasta}</span></div>`).join('')}</div>` : '<p class="sub">No cubrió nada este mes.</p>'}`; };
+  const resumen = () => { const del = rs.filter(r => r.fecha.slice(0, 7) === mes), m = del.reduce((t, r) => t + minR(r), 0);
+    return `${x.nombre} · ${MESES[+mes.slice(5) - 1]} ${mes.slice(0, 4)}: ${del.length} reemplazos, ${horasTxt(m)}\n` + del.slice().reverse().map(r => `${fechaCorta(r.fecha)} ${r.desde}-${r.hasta} cubrió a ${r.titularNombre || nom(r.titular)} (${queCubre(r)})`).join('\n'); };
+  const m = modal(`${cabModal('Externo')}<div class="persona"><div class="avatar av-ext">${esc(x.nombre.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase())}</div><div><b>${esc(x.nombre)}</b><span class="sub">Externo · no es staff</span></div></div>
+    <div class="lista"><div class="item"><span class="sub">Celular</span><span class="mono">${esc(x.tel || '—')}</span></div><div class="item"><span class="sub">Cubre</span><span>${esc((x.acts || []).join(', ') || 'a confirmar')}</span></div><div class="item"><span class="sub">Puede</span><span>${esc(x.disp || 'a confirmar')}</span></div></div>
+    <h4>Historial de reemplazos</h4><div id="x-cuerpo" style="display:grid;gap:10px">${cuerpo()}</div>
+    <div class="modal-pie"><button class="btn ghost" id="x-quitar" style="margin-right:auto">Quitar de la carpeta</button>${x.tel ? `<a class="btn ghost" target="_blank" rel="noopener" href="${waLink(x.tel, `Hola ${x.nombre.split(' ')[0]}! `)}">WhatsApp</a>` : ''}<button class="btn ghost" id="x-copiar">Copiar resumen para pagarle</button><button class="btn" id="x-editar">Editar</button></div>`, { ancho: true });
+  const enlazarMes = () => $$('[data-xm]', m.el).forEach(b => b.onclick = () => { mes = b.dataset.xm; $('#x-cuerpo', m.el).innerHTML = cuerpo(); enlazarMes(); });
+  enlazarMes();
+  $('#x-copiar', m.el).onclick = () => copiar(resumen());
+  $('#x-editar', m.el).onclick = () => { m.cerrar(); editarExterno(x); };
+  $('#x-quitar', m.el).onclick = async () => {
+    if (!(await confirmar(`¿Quitar a <b>${esc(x.nombre)}</b> de la carpeta de externos? Sus reemplazos quedan guardados en el historial.`, { si: 'Quitar' }))) return;
+    await guardarExternos(todosExt().map(y => y.id === x.id ? { ...y, oculto: true } : y)); m.cerrar(); toast('Quitado de Externos');
+  };
+}
+function editarExterno(x = null) {
+  const acts = [...new Set([...ACTIVIDADES_BASE, ...S.clases.map(c => c.actividad), 'Musculación', 'Recepción', 'Limpieza', ...(x?.acts || [])])].filter(Boolean).sort();
+  const m = modal(`${cabModal(x ? 'Editar externo' : 'Agregar externo')}<p class="sub">Contratado que solo cubre reemplazos. No entra al staff, al censo ni a la asistencia.</p>
+    <div class="form"><label>Nombre y apellido<input id="x-n" value="${esc(x?.nombre || '')}" placeholder="Ej. Paula Ruiz"></label>
+      <label>Celular<input id="x-t" inputmode="tel" value="${esc(x?.tel || '')}" placeholder="11 5555-1234"></label>
+      <div><span class="sub">Qué puede cubrir (tocá todas las que van)</span><div class="checks" id="x-acts">${acts.map(a => `<button type="button" class="chip-sel" aria-pressed="${(x?.acts || []).includes(a)}" data-act="${esc(a)}">${esc(a)}</button>`).join('')}</div></div>
+      <label>Cuándo puede<input id="x-d" value="${esc(x?.disp || '')}" placeholder="Ej. martes y jueves a la mañana"></label></div>
+    <div class="modal-pie"><button class="btn ghost" data-cerrar>Cancelar</button><button class="btn ext" id="x-ok">Guardar en Externos</button></div>`);
+  $$('[data-act]', m.el).forEach(b => b.onclick = () => b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true'));
+  $('#x-ok', m.el).onclick = async () => {
+    const nombre = $('#x-n', m.el).value.trim();
+    if (!nombre) { $('#x-n', m.el).focus(); return toast('Escribí el nombre', true); }
+    const id = x?.id || slugExt(nombre);
+    if (!x && EXT(id) && !EXT(id).oculto) return toast('Ya hay un externo con ese nombre', true);
+    if (!x && S.personal.some(p => sinTildes(nombreCompleto(p)) === sinTildes(nombre))) return toast('Esa persona ya está en el staff', true);
+    const dato = { id, nombre, tel: $('#x-t', m.el).value.trim(), acts: $$('[data-act][aria-pressed="true"]', m.el).map(b => b.dataset.act), disp: $('#x-d', m.el).value.trim() };
+    const lista = todosExt().filter(y => y.id !== id);
+    try { await guardarExternos([...lista, dato]); } catch { return toast('No se pudo guardar', true); }
+    m.cerrar(); toast(`${nombre.split(' ')[0]} quedó guardado en Externos`);
   };
 }
 
@@ -1395,6 +1718,7 @@ const AYUDA_TAB = {
   censo: 'Acá ves quién completó la ficha del censo y quién falta. Con "Copiar mensaje" mandás el link por WhatsApp. Las fichas nuevas se aprueban en Personal.',
   personal: 'Acá están las fichas de todos. Tocá una persona para ver sus datos, horarios y faltas. Con "+ Cargar persona" cargás a alguien a mano, y ahí mismo podés agregar sus clases con horario.',
   grilla: 'Acá están las clases de cada sede. El botón Musculación muestra la sala con barras de color. "Calendario del mes" muestra cada día: tocá un día para ver quién está y a qué hora.',
+  externos: 'Acá están los profes contratados que no son staff: solo cubren reemplazos. Con "+ Agregar externo" guardás uno nuevo. Tocá uno para ver cuántas horas cubrió en el mes y copiar el resumen para pagarle.',
   vacaciones: 'Acá llegan los pedidos de vacaciones y ausencias. Tocá uno para aprobarlo o rechazarlo. Con "Cargar ausencia" anotás cuando alguien avisa por teléfono.',
   reemplazos: 'Acá ves quién cubre a quién. Rojo es lo que falta. Tocá "Asignar" o "Cubrir por partes u otra persona" para elegir quién cubre y en qué horario.',
   asistencia: 'Acá ves los fichajes del mes, las llegadas tarde y las faltas sin aviso. Si alguien avisó, tocá "Justificar". Si se olvidó de fichar, usá "+ Fichaje manual".',
