@@ -176,9 +176,14 @@ export function resumenSemana(ag) {
 }
 export function horasSemanales(p, clases) { return agenda(p, clases).reduce((t, s) => t + (min(s.hasta) - min(s.desde)), 0) / 60; }
 
-export function ausenteEn(email, fecha, ausencias) {
-  return ausencias.some(a => a.email === email && a.estado === 'aprobada' && a.desde <= fecha && a.hasta >= fecha);
+// Una ausencia puede ser de todo el día o solo de algunos horarios (a.horas = [['17:00','18:00'], ...])
+export const tocaHoras = (a, desde, hasta) => !(a.horas || []).length || desde == null || a.horas.some(([d, h]) => seSolapan(d, h, desde, hasta || desde));
+// Devuelve la ausencia (o nada). Con desde/hasta, solo cuenta si ese horario está dentro de la falta.
+export function ausenteEn(email, fecha, ausencias, desde = null, hasta = null) {
+  return ausencias.find(a => a.email === email && a.estado === 'aprobada' && a.desde <= fecha && a.hasta >= fecha && tocaHoras(a, desde, hasta));
 }
+// "solo 17:00–18:00" cuando la falta no es de todo el día
+export const textoHoras = a => (a?.horas || []).length ? 'solo ' + a.horas.map(x => x.join('–')).join(' y ') : '';
 
 // Turnos y clases que deja descubiertos una ausencia. Siempre se busca reemplazo:
 // - cuentan sus clases y turnos, y las clases que declaró en el censo que todavía no tienen profe;
@@ -194,11 +199,12 @@ export function necesidades(aus, titular, clases) {
   for (const f of rangoFechas(aus.desde, aus.hasta)) {
     const dia = deIso(f).getDay();
     const base = { fecha: f, dia, titular: titular.email, ausenciaId: aus.id };
-    const delDia = ag.filter(s => s.dia === dia);
+    // Si avisó que falta solo a algunos horarios, solo esos piden reemplazo
+    const delDia = ag.filter(s => s.dia === dia && tocaHoras(aus, s.desde, s.hasta));
     for (const s of delDia) {
       out.push({ ...base, desde: s.desde, hasta: s.hasta, rol: s.rol, actividad: s.actividad || '', sede: s.sede || '', claseId: s.claseId || '' });
     }
-    if (!delDia.length && !trabajaAlguno && HORARIO_CLUB[dia]) {
+    if (!delDia.length && !trabajaAlguno && !(aus.horas || []).length && HORARIO_CLUB[dia]) {
       // el área: la de sus turnos fijos o, si no tiene, su primer rol
       const rol = ag[0]?.rol || (titular.roles || [])[0] || 'clases';
       out.push({ ...base, desde: HORARIO_CLUB[dia][0], hasta: HORARIO_CLUB[dia][1], rol, actividad: '', sede: '', claseId: '', generico: true });
@@ -250,7 +256,7 @@ export function candidatos(n, personal, ausencias, reemplazos, clases) {
     .filter(p => activo(p) && p.email !== n.titular)
     .filter(p => (p.roles || []).includes(n.rol))
     .filter(p => n.rol !== 'clases' || !n.actividad || (p.actividades || []).includes(n.actividad))
-    .filter(p => !ausenteEn(p.email, n.fecha, ausencias))
+    .filter(p => !ausenteEn(p.email, n.fecha, ausencias, n.generico ? null : n.desde, n.generico ? null : n.hasta))
     // Si el horario es "a confirmar" (no tenía nada cargado) no se descarta a nadie por horario
     .filter(p => n.generico || !agenda(p, clases).some(s => s.dia === n.dia && seSolapan(s.desde, s.hasta, n.desde, n.hasta)))
     .filter(p => n.generico || !reemplazos.some(r => r.reemplazo === p.email && r.fecha === n.fecha && seSolapan(r.desde, r.hasta, n.desde, n.hasta)))

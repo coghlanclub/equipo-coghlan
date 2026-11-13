@@ -404,6 +404,9 @@ td.num, th.num { text-align: right; }
 .grilla th.hoy { background: var(--fg); color: var(--bg); }
 .grilla td.hoy { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .chip-sel { border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); border-radius: 99px; padding: 5px 11px; font: inherit; font-size: .82rem; cursor: pointer; }
+.chip-hr { border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: .84rem; cursor: pointer; text-decoration: line-through; }
+.chip-hr[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border: 2px dashed var(--accent); font-weight: 700; text-decoration: none; }
+.chip-hr[aria-pressed="true"]::before { content: "No viene · "; }
 .chip-sel[aria-pressed="true"] { background: var(--ext-soft); color: var(--ext); border-color: var(--ext); font-weight: 700; }
 .asis-sem { display: grid; grid-template-columns: 150px repeat(6, minmax(52px, 1fr)); gap: 4px; align-items: center; min-width: 560px; }
 .asis-sem .h { font-size: .72rem; font-weight: 700; color: var(--muted); text-align: center; }

@@ -5,7 +5,7 @@ import {
   hoy, iso, deIso, mesDe, sumarDias, rangoTexto, diasDeTrabajo, textoDias, fechaLarga, fechaCorta, min, seSolapan, nombreCompleto, iniciales,
   activo, agenda, bloquesAgenda, resumenSemana, necesidades, tipoReemplazo, cubierto, reemplazosDe, faltaCubrir, candidatos, huecos, conflictos, ausenteEn, jornadas, resumenAsistencia,
   horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
-  faltasSinAviso, sinCorreo, rangoFechas, normTel, HORARIO_CLUB, hhmm, FRANJAS, enClasesDeUnaHora,
+  faltasSinAviso, sinCorreo, rangoFechas, normTel, textoHoras, tocaHoras, HORARIO_CLUB, hhmm, FRANJAS, enClasesDeUnaHora,
 } from './logica.js';
 import { enviarCorreo, envioAutomatico, destinos } from './correo.js';
 import { CORREO_GERENCIA } from './config.js';
@@ -107,6 +107,8 @@ async function guardarExternos(lista) { await guardar('config', 'externos', { li
 const todosExt = () => { const vis = externos(); return [...vis, ...(S.externos || []).filter(x => x.oculto && !vis.some(v => v.id === x.id))]; };
 const libreExt = (x, fecha, desde, hasta) => !S.reemplazos.some(r => r.reemplazo === x.id && r.fecha === fecha && seSolapan(r.desde, r.hasta, desde, hasta));
 const minR = r => min(r.hasta) - min(r.desde);
+// ¿Falta en ese horario? (aprobada o pedido sin responder: igual ya se busca reemplazo)
+const faltaEn = (email, f, desde, hasta) => S.ausencias.find(a => a.email === email && (a.estado === 'aprobada' || a.estado === 'pendiente') && a.desde <= f && a.hasta >= f && tocaHoras(a, desde, hasta));
 const horasTxt = m => m % 60 ? fmtMin(m) : `${m / 60} h`;
 
 // Estado de cada pedazo de turno, con un color fijo en toda la app:
@@ -444,7 +446,7 @@ const estiloAvatar = clave => { const h = colorDe(clave); return `background:hsl
 // Cómo está hoy: falta, trabaja (de qué hora a qué hora), vacaciones que vienen o no trabaja
 function estadoHoy(p) {
   const h = hoy(), a = ausenteEn(p.email, h, S.ausencias);
-  if (a) return `<span class="est est-falta">${a.tipo === 'vacaciones' ? 'De vacaciones' : 'Falta hoy'}</span>`;
+  if (a) return `<span class="est est-falta">${a.tipo === 'vacaciones' ? 'De vacaciones' : 'Falta hoy'}${textoHoras(a) ? ' · ' + textoHoras(a) : ''}</span>`;
   const prox = S.ausencias.filter(x => x.email === p.email && x.desde > h && x.estado !== 'rechazada').sort((x, y) => x.desde.localeCompare(y.desde))[0];
   const bs = bloquesAgenda(agenda(p, S.clases).filter(s => s.dia === new Date().getDay()));
   const px = prox ? ` · ${prox.tipo === 'vacaciones' ? 'vacaciones' : 'ausencia'} ${fechaCorta(prox.desde).slice(0, 5)}${prox.estado === 'pendiente' ? ' (pedido)' : ''}` : '';
@@ -625,7 +627,7 @@ const INI_CLUB = Math.min(...DIAS_LABORABLES.map(d => min(HORARIO_CLUB[d][0]))),
 function bloquesSala(d, f, turnos = turnosSala()) {
   const out = [];
   for (const t of turnos.filter(t => t.dia === d)) {
-    const aus = f && ausenteEn(t.p.email, f, S.ausencias);
+    const aus = f && ausenteEn(t.p.email, f, S.ausencias, t.desde, t.hasta);
     out.push({ desde: t.desde, hasta: t.hasta, nombre: nombreCompleto(t.p), clave: t.p.email, tipo: aus ? 'ausente' : 'turno', email: t.p.email });
     if (aus) for (const r of reemplazosDe({ titular: t.p.email, fecha: f, desde: t.desde, hasta: t.hasta, actividad: '' }, S.reemplazos))
       out.push({ desde: r.desde, hasta: r.hasta, nombre: nomR(r), clave: r.reemplazo, tipo: 'cubre', aQuien: t.p.nombre || nombreCompleto(t.p), email: r.externo ? '' : r.reemplazo });
@@ -726,8 +728,7 @@ function estadoClase(c, f) {
   if (!c.profesor) return { k: 'falta', txt: 'Sin profe' };
   const quien = nom(c.profesor).split(' ')[0];
   // Cuenta también el pedido sin responder: ya se busca reemplazo
-  const pedido = S.ausencias.some(a => a.email === c.profesor && a.estado === 'pendiente' && a.desde <= f && a.hasta >= f);
-  if (!ausenteEn(c.profesor, f, S.ausencias) && !pedido) return { k: 'tit', txt: quien };
+  if (!faltaEn(c.profesor, f, c.desde, c.hasta)) return { k: 'tit', txt: quien };
   const n = necesidadesFuturas(f, f).find(x => x.titular === c.profesor && x.desde === c.desde && (x.actividad || '') === (c.actividad || ''))
     || { titular: c.profesor, fecha: f, dia: c.dia, desde: c.desde, hasta: c.hasta, rol: 'clases', actividad: c.actividad, sede: c.sede, claseId: c.id };
   const rs = reemplazosDe(n, S.reemplazos);
@@ -795,7 +796,7 @@ function estadoDelDia(fecha) {
   const cs = S.clases.filter(c => c.dia === dia).sort((a, b) => a.desde.localeCompare(b.desde) || a.sede.localeCompare(b.sede));
   return cs.map(c => {
     const tit = c.profesor;
-    const aus = tit && ausenteEn(tit, fecha, S.ausencias);
+    const aus = tit && ausenteEn(tit, fecha, S.ausencias, c.desde, c.hasta);
     const r = aus ? cubierto({ titular: tit, fecha, desde: c.desde, hasta: c.hasta, actividad: c.actividad }, S.reemplazos) : null;
     return { c, tit, aus, r, ok: !!tit && (!aus || !!r) };
   });
@@ -856,8 +857,9 @@ function lineaDelDia(f) {
     if (!ag.length && !cubre.length) continue;
     const pedido = !aus && S.ausencias.some(a => a.email === p.email && a.estado === 'pendiente' && a.desde <= f && a.hasta >= f);
     const necs = aus || pedido ? necesidadesFuturas(f, f).filter(n => n.titular === p.email) : [];
-    filas.push({ nombre: nombreCompleto(p), email: p.email, aus: !!aus || pedido, bs: [
-      ...ag.map(s => ({ desde: s.desde, hasta: s.hasta, tipo: aus || pedido ? 'ausente' : 'tit', clave: p.email, txt: s.actividad || ROL_CORTO[s.rol] })),
+    const todoElDia = ag.every(s => faltaEn(p.email, f, s.desde, s.hasta));
+    filas.push({ nombre: nombreCompleto(p), email: p.email, aus: (!!aus || pedido) && todoElDia, bs: [
+      ...ag.map(s => ({ desde: s.desde, hasta: s.hasta, tipo: faltaEn(p.email, f, s.desde, s.hasta) ? 'ausente' : 'tit', clave: p.email, txt: s.actividad || ROL_CORTO[s.rol] })),
       // Lo que falta cubrir de quien no viene, en rojo y para tocar
       ...necs.flatMap(n => faltaCubrir(n, S.reemplazos).filter(([d, h]) => d && h).map(([d, h]) => ({ desde: d, hasta: h, tipo: 'falta', txt: 'Falta · ' + (n.actividad || ROL_CORTO[n.rol]), n }))),
       ...cubre.map(r => ({ desde: r.desde, hasta: r.hasta, tipo: estadoR(r), clave: p.email, txt: `cubre a ${(r.titularNombre || nom(r.titular)).split(' ')[0]}` })),
@@ -893,7 +895,7 @@ function verDia(f) {
         <td>${!x.tit ? '<span class="pill sin">Sin profesor</span>' : x.aus ? (x.r ? `${esc(nomsTurno({ titular: x.tit, fecha: f, desde: x.c.desde, hasta: x.c.hasta, actividad: x.c.actividad }))} <span class="pill info">reemplaza a ${esc(nom(x.tit))}</span>` : `<span class="pill sin">${esc(nom(x.tit))} ausente · sin cubrir</span>`) : esc(nom(x.tit))}</td></tr>`).join('')}
     </tbody></table></div>` : '<p class="vacio">No hay clases este día.</p>'}
     ${turnos.length ? `<h4>Turnos fijos</h4><div class="lista">${turnos.sort((a, b) => a.desde.localeCompare(b.desde)).map(t => {
-      const aus = ausenteEn(t.p.email, f, S.ausencias);
+      const aus = ausenteEn(t.p.email, f, S.ausencias, t.desde, t.hasta);
       const n = { titular: t.p.email, fecha: f, desde: t.desde, hasta: t.hasta, actividad: '' };
       const falta = aus ? faltaCubrir(n, S.reemplazos) : [];
       return `<div class="item"><span><span class="rol rol-${t.rol}">${ROL_CORTO[t.rol]}</span> <span class="mono">${t.desde}–${t.hasta}</span> ${esc(nombreCompleto(t.p))}</span>
@@ -917,7 +919,7 @@ function vVacaciones(v) {
       const minNec = necs.filter(n => !n.generico && n.desde && n.hasta).reduce((t, n) => t + min(n.hasta) - min(n.desde), 0);
       const choques = S.ausencias.filter(x => x.id !== a.id && x.estado === 'aprobada' && x.desde <= a.hasta && x.hasta >= a.desde);
       return `<div class="item"><div><b>${esc(a.nombre || nom(a.email))} · ${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'}</b>
-        <span class="sub"><span class="mono">${rangoTexto(a.desde, a.hasta)}</span>${a.motivo ? ' · ' + esc(a.motivo) : ''}</span>
+        <span class="sub"><span class="mono">${rangoTexto(a.desde, a.hasta)}${textoHoras(a) ? ' · ' + textoHoras(a) : ''}</span>${a.motivo ? ' · ' + esc(a.motivo) : ''}</span>
         <span class="impacto"><span class="i-dias">${textoDias(a.desde, a.hasta, P(a.email), S.clases)}</span> · <span class="i-horas">${minNec ? `deja ${horasTxt(minNec)} para cubrir` : necs.length ? `${necs.length} turno(s) a confirmar` : 'no deja nada para cubrir'}</span></span>
         ${choques.length ? `<span class="sub" style="color:var(--warn)">Esos días también falta: ${esc(choques.map(x => x.nombre || nom(x.email)).join(', '))}</span>` : ''}</div>
         <div class="acciones"><button class="btn sm ghost" data-ver-aus="${a.id}">Ver detalle</button><button class="btn sm ok" data-aprobar-aus="${a.id}">Aprobar</button><button class="btn sm ghost" data-rechazar-aus="${a.id}">Rechazar</button></div></div>`;
@@ -938,7 +940,7 @@ function vVacaciones(v) {
       return prox.length ? `<div class="lista">${prox.map(a => {
         const necs = necesidades(a, P(a.email), S.clases).filter(n => n.fecha >= h);
         const sin = necs.filter(n => !cubierto(n, S.reemplazos)).length;
-        return `<div class="item"><div><b>${esc(a.nombre || nom(a.email))}</b><span class="sub">${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'} · <span class="mono">${rangoTexto(a.desde, a.hasta)}</span></span>${htmlCubren(a)}</div>
+        return `<div class="item"><div><b>${esc(a.nombre || nom(a.email))}</b><span class="sub">${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'} · <span class="mono">${rangoTexto(a.desde, a.hasta)}${textoHoras(a) ? ' · ' + textoHoras(a) : ''}</span></span>${htmlCubren(a)}</div>
           <div class="acciones">${necs.length ? `<span class="pill ${sin ? 'sin' : 'cubierto'}">${sin ? `${sin} de ${necs.length} sin cubrir` : 'Todo cubierto'}</span>` : '<span class="pill neutro">Sin turnos</span>'}<button class="btn sm ghost" data-ver-aus="${a.id}">Detalle</button></div></div>`;
       }).join('')}</div>` : '<p class="vacio">No hay ausencias aprobadas por delante.</p>';
     })()}</div>
@@ -1028,7 +1030,7 @@ function verAusencia(a) {
   const m = modal(`${cabModal(a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia')}
     <div class="persona"><div class="avatar">${esc(iniciales(p || { nombre: a.nombre }))}</div><div><b>${esc(a.nombre || nom(a.email))}</b><div>${p ? chipsRoles(p) : ''}</div></div>
       <span class="pill ${a.estado}" style="margin-left:auto">${ESTADOS[a.estado]}</span></div>
-    <p><b class="mono">${rangoTexto(a.desde, a.hasta)}</b> · ${textoDias(a.desde, a.hasta, p, S.clases)}${a.motivo ? `<br><span class="sub">Motivo: ${esc(a.motivo)}</span>` : ''}${a.nota ? `<br><span class="sub">Nota de gerencia: ${esc(a.nota)}</span>` : ''}</p>
+    <p><b class="mono">${rangoTexto(a.desde, a.hasta)}${textoHoras(a) ? ' · ' + textoHoras(a) : ''}</b> · ${textoDias(a.desde, a.hasta, p, S.clases)}${a.motivo ? `<br><span class="sub">Motivo: ${esc(a.motivo)}</span>` : ''}${a.nota ? `<br><span class="sub">Nota de gerencia: ${esc(a.nota)}</span>` : ''}</p>
     ${p ? htmlContacto(p) : ''}
     ${a.estado !== 'rechazada' && necs.length ? `<div style="display:grid;gap:8px"><h4>Quién cubre</h4><div class="tabla-wrap"><table><thead><tr><th>Día</th><th>Horario</th><th>Qué</th><th>Cubre</th></tr></thead><tbody>
       ${necs.map(n => { const r = cubierto(n, S.reemplazos); return `<tr><td>${fechaCorta(n.fecha).slice(0, 5)} ${DIAS_CORTOS[n.dia]}</td><td class="mono">${n.desde}–${n.hasta}</td><td>${esc(n.rol === 'clases' ? queCubre(n) : ROL_CORTO[n.rol])}</td>
@@ -1088,19 +1090,40 @@ function cargarAusencia(email = '', pre = {}) {
     <div class="form"><label>Persona<select id="ca-p">${activos().sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b))).map(p => `<option value="${esc(p.email)}" ${p.email === email ? 'selected' : ''}>${esc(nombreCompleto(p))}</option>`).join('')}</select></label>
       <div class="fila"><label>Tipo<select id="ca-t"><option value="ausencia">Ausencia</option><option value="vacaciones">Vacaciones</option></select></label>
         <label>Desde<input type="date" id="ca-d" value="${hoy()}"></label><label>Hasta<input type="date" id="ca-h" value="${hoy()}"></label></div>
+      <div id="ca-hs"></div>
       <label>Motivo<input id="ca-m"></label></div>
     <div class="modal-pie"><button class="btn ghost" data-cerrar>Cancelar</button><button class="btn" id="ca-ok">Guardar</button></div>`);
+  // Si es un solo día: elegir qué horarios no viene (por defecto, todos). Así no aparecen los que sí da.
+  let elegidos = null;
+  const pintarHs = () => {
+    const e = $('#ca-p', m.el).value, d = $('#ca-d', m.el).value, h = $('#ca-h', m.el).value, box = $('#ca-hs', m.el);
+    const ag = d && d === h ? bloquesAgenda(agenda(P(e) || {}, S.clases).filter(s => s.dia === deIso(d).getDay())).map(b => [b.desde, b.hasta, b.que]) : [];
+    if (ag.length < 2) { box.innerHTML = ag.length ? `<p class="sub">Ese día tiene ${ag[0][0]}–${ag[0][1]} ${esc(ag[0][2])}.</p>` : ''; elegidos = null; return; }
+    // Partir los bloques largos de clases en horas (cada clase es de 1 hora)
+    const hs = bloquesAgenda(agenda(P(e) || {}, S.clases).filter(s => s.dia === deIso(d).getDay())).flatMap(b => b.clase ? enClasesDeUnaHora(b.desde, b.hasta).map(([x, y]) => [x, y, b.que]) : [[b.desde, b.hasta, b.que]]);
+    if (!elegidos) elegidos = new Set(pre.horas ? hs.filter(([x, y]) => pre.horas.some(([a, b]) => seSolapan(a, b, x, y))).map(x => x[0]) : hs.map(x => x[0]));
+    box.innerHTML = `<div style="display:grid;gap:6px"><span class="sub"><b>¿A qué horarios no viene?</b> Tocá para marcar o desmarcar. Solo lo marcado pide reemplazo.</span>
+      <div class="checks">${hs.map(([x, y, q]) => `<button type="button" class="chip-hr" data-hr="${x}|${y}" aria-pressed="${elegidos.has(x)}"><span class="mono">${x}–${y}</span> ${esc(q)}</button>`).join('')}</div>
+      <span class="sub" id="ca-hs-txt">${elegidos.size === hs.length ? 'Todo el día.' : `Solo ${elegidos.size} de ${hs.length} horarios.`}</span></div>`;
+    $$('[data-hr]', box).forEach(b => b.onclick = () => { const x = b.dataset.hr.split('|')[0]; elegidos.has(x) ? elegidos.delete(x) : elegidos.add(x); pintarHs(); });
+    box.dataset.total = hs.length; box.dataset.hs = JSON.stringify(hs.map(([x, y]) => [x, y]));
+  };
+  ['#ca-p', '#ca-d', '#ca-h'].forEach(s => $(s, m.el).addEventListener('change', () => { elegidos = null; pintarHs(); }));
   // El asistente la puede abrir ya completa (tipo, fechas y motivo)
   if (pre.tipo) $('#ca-t', m.el).value = pre.tipo;
   if (pre.desde) $('#ca-d', m.el).value = pre.desde;
   if (pre.hasta || pre.desde) $('#ca-h', m.el).value = pre.hasta || pre.desde;
   if (pre.motivo) $('#ca-m', m.el).value = pre.motivo;
   $('#ca-d', m.el).onchange = e => { if ($('#ca-h', m.el).value < e.target.value) $('#ca-h', m.el).value = e.target.value; };
+  pintarHs();
   $('#ca-ok', m.el).onclick = async () => {
     const e = $('#ca-p', m.el).value, desde = $('#ca-d', m.el).value, hasta = $('#ca-h', m.el).value;
     if (!e || !desde || !hasta || hasta < desde) return toast('Revisá persona y fechas', true);
-    await agregar('ausencias', { email: e, nombre: nom(e), tipo: $('#ca-t', m.el).value, desde, hasta, motivo: $('#ca-m', m.el).value.trim(), estado: 'aprobada', creado: AHORA, respondida: AHORA, respondidaPor: S.user.email, cargadaPorGerencia: true });
-    m.cerrar(); toast('Ausencia cargada');
+    const box = $('#ca-hs', m.el), todas = box.dataset.hs ? JSON.parse(box.dataset.hs) : [];
+    const horas = elegidos && desde === hasta && elegidos.size < todas.length ? todas.filter(([x]) => elegidos.has(x)) : null;
+    if (elegidos && !elegidos.size) return toast('Marcá al menos un horario', true);
+    await agregar('ausencias', { email: e, nombre: nom(e), tipo: $('#ca-t', m.el).value, desde, hasta, ...(horas ? { horas } : {}), motivo: $('#ca-m', m.el).value.trim(), estado: 'aprobada', creado: AHORA, respondida: AHORA, respondidaPor: S.user.email, cargadaPorGerencia: true });
+    m.cerrar(); toast(horas ? `Cargado: ${nom(e).split(' ')[0]} no viene ${horas.map(x => x.join('–')).join(' y ')}` : 'Ausencia cargada');
   };
 }
 
@@ -1256,7 +1279,7 @@ async function asignar(n, email) {
 
 // Elegir quién cubre y qué parte del turno: cualquier activo o alguien que no está en el sistema
 function asignarManual(n) {
-  const todos = activos().filter(p => p.email !== n.titular && !ausenteEn(p.email, n.fecha, S.ausencias)).sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b)));
+  const todos = activos().filter(p => p.email !== n.titular && !ausenteEn(p.email, n.fecha, S.ausencias, n.generico ? null : n.desde, n.generico ? null : n.hasta)).sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b)));
   const falta = faltaCubrir(n, S.reemplazos);
   const [d0, h0] = falta[0] || [n.desde, n.hasta];
   const m = modal(`${cabModal('Asignar reemplazo')}<p class="sub">${fechaLarga(n.fecha)} · turno <span class="mono">${n.desde}–${n.hasta}</span> · ${esc(queCubre(n))}${falta.length ? ` · falta cubrir <span class="mono">${falta.map(x => x.join('–')).join(', ')}</span>` : ''}</p>
@@ -1801,7 +1824,7 @@ function rangoEn(t) {
 function horasEn(t) {
   const n = sinTildes(t).replace(/(\d)\s*hs?\b/g, '$1').replace(/(\d) horas/g, '$1');
   const hh = (h, m) => `${pad(+h)}:${pad(+(m || 0))}`;
-  const r = n.match(/(?:de |desde (?:las )?)?(\d{1,2})(?::(\d{2}))? (?:a|hasta|-) (?:las )?(\d{1,2})(?::(\d{2}))?/);
+  const r = n.match(/(?:de |desde (?:las )?)?(?<![\/\d:])(\d{1,2})(?::(\d{2}))? (?:a|hasta|-) (?:las )?(\d{1,2})(?::(\d{2}))?(?!\/)/);
   if (r && +r[1] <= 23 && +r[3] <= 23 && +r[3] > +r[1]) return [hh(r[1], r[2]), hh(r[3], r[4])];
   const u = n.match(/a las (\d{1,2})(?::(\d{2}))?/);
   return u ? [hh(u[1], u[2]), null] : null;
@@ -1811,7 +1834,7 @@ function fechasEn(t) {
   const out = new Set();
   for (const m of n.matchAll(/\b(\d{1,2})\/(\d{1,2})\b/g)) out.add(fechaNum(m[1], m[2]));
   for (const m of n.matchAll(/\b(?:el|dia|y|los|del)\s+(?:dia\s+)?(\d{1,2})\b(?!\s*(?::|\/|a \d|hasta|al \d))/g)) if (+m[1] >= 1 && +m[1] <= 31) out.add(fechaNum(m[1]));
-  DIAS_TXT.forEach((d, i) => { if (new RegExp(`\\b${d}\\b`).test(n)) { const h = new Date(); out.add(iso(sumarDias(h, (i - h.getDay() + 7) % 7))); } });
+  if (!out.size) DIAS_TXT.forEach((d, i) => { if (new RegExp(`\\b${d}\\b`).test(n)) { const h = new Date(); out.add(iso(sumarDias(h, (i - h.getDay() + 7) % 7))); } });
   if (!out.size) { const f = fechaEn(t); if (f) out.add(f); }
   return [...out].sort();
 }
@@ -1847,7 +1870,11 @@ function actividadEn(t) {
 const EJEMPLOS = ['¿Cuántos profesores tenemos?', '¿Qué falta cubrir esta semana?', '¿Quién falta hoy?', '¿Quién está libre mañana a la tarde?',
   '¿Hay vacaciones para aprobar?', '¿Cuántas clases hay por semana?', '¿Quién llegó tarde este mes?', '¿Quién falta completar el censo?',
   '¿Cuántas personas hay en recepción?', '¿Qué clases no tienen profe?', '¿Quién trabaja mañana?', '¿Cómo se usa esta pantalla?'];
+// "4 de diciembre" → "4/12" (así lo entienden todas las fechas: "el viernes 4 de diciembre", "del 1 al 5 de diciembre")
+const MESES_TXT = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const conMeses = t => sinTildes(t).replace(/setiembre/g, 'septiembre').replace(new RegExp(`\\b(\\d{1,2})\\s+(?:de\\s+)?(${MESES_TXT.join('|')})\\b`, 'g'), (_, d, m) => `${d}/${MESES_TXT.indexOf(m) + 1}`);
 function responderLocal(texto) {
+  texto = conMeses(texto);
   const n = sinTildes(texto), ws = palabras(texto);
   const ps = personasEn(texto), quien = ps[0] || null, f = fechaEn(texto), fr = franjaEn(texto), hs = horasEn(texto), fs = fechasEn(texto);
   // Si hay más de una acción, un botón extra las hace todas juntas (con una sola confirmación)
@@ -1934,14 +1961,36 @@ function responderLocal(texto) {
       return R(`Te dejo el botón para habilitar el celular de ${pila(quien)}.`, [accion('habilitar_celular', `Habilitar celular de ${pila(quien)}`, { email: quien.email })]);
   }
   // Vacaciones o ausencias que alguien avisó: "Diego avisó que el jueves no viene", "cargá vacaciones a Rosa del 10 al 20"
-  if (quien && (dice(ws, ['avis', 'enferm', 'medic', 'vacacion', 'licencia', 'falta', 'faltar', 'no viene', 'carga', 'anota']) && (/no (viene|va a venir|puede)|avis|enferm|medic|carg|anot|licencia/.test(n) || dice(ws, ['vacacion'])))
-      && !/(cubre|libre|pedido|pendiente)/.test(n)) {
+  const avisaFalta = (/no (viene|va a venir|vendra|puede|va|esta)|avis|enferm|medic|carg|anot|licencia|falta(ra|r)?\b|ausen/.test(n) || dice(ws, ['vacacion', 'licencia', 'enferm']))
+    && !/(cubr|libre|pedido|pendiente|quien|sin aviso|sin profe|asistencia|tarde)/.test(n);
+  if (quien && avisaFalta) {
     const rg = rangoEn(texto);
     if (rg) {
       const vac = dice(ws, ['vacacion']);
-      return R(`Te abro ${vac ? 'las vacaciones' : 'la ausencia'} de ${pila(quien)} ${rg[0] === rg[1] ? 'del ' + fechaLarga(rg[0]) : 'del ' + rangoTexto(rg[0], rg[1])}. Revisá y tocá Guardar.`,
-        [accion('cargar_ausencia', `Cargar ${vac ? 'vacaciones' : 'ausencia'} de ${pila(quien)}`, { email: quien.email, tipoAusencia: vac ? 'vacaciones' : 'ausencia', fecha: rg[0], hasta: rg[1], motivo: /medic/.test(n) ? 'Médico' : /enferm/.test(n) ? 'Enfermedad' : '' })]);
+      // "a las 17" o "de 17 a 19": solo esos horarios (si es un solo día)
+      let horas = null;
+      if (hs && rg[0] === rg[1]) {
+        const ag = agenda(quien, S.clases).filter(s => s.dia === deIso(rg[0]).getDay());
+        const toca = hs[1] ? ag.filter(s => seSolapan(s.desde, s.hasta, hs[0], hs[1])) : ag.filter(s => min(s.desde) <= min(hs[0]) && min(s.hasta) > min(hs[0]));
+        horas = hs[1] ? [[hs[0], hs[1]]] : toca.length ? toca.map(s => [s.desde, s.hasta]) : [[hs[0], sumarMin(hs[0], DURACION_CLASE)]];
+        if (!toca.length) return R(`Ojo: ${pila(quien)} no tiene nada a las ${hs[0]} ese día (${fechaLarga(rg[0])}). ${ag.length ? `Ese día tiene: ${listar(ag.map(s => `${s.desde}–${s.hasta} ${s.actividad || ROL_CORTO[s.rol]}`))}.` : 'Ese día no trabaja.'}`,
+          [accion('cargar_ausencia', `Cargar la falta igual`, { email: quien.email, tipoAusencia: 'ausencia', fecha: rg[0], hasta: rg[1] }), accion('ver_ficha', `Ver ficha de ${pila(quien)}`, { email: quien.email })]);
+      }
+      const cuando = rg[0] === rg[1] ? 'el ' + fechaLarga(rg[0]) : 'del ' + rangoTexto(rg[0], rg[1]);
+      return R(`Entendido: ${pila(quien)} no viene ${cuando}${horas ? `, solo ${horas.map(x => x.join('–')).join(' y ')}` : ''}. Te abro el formulario ya completo: revisá y tocá Guardar.${horas ? ' Solo ese horario va a pedir reemplazo.' : ''}`,
+        [{ ...accion('cargar_ausencia', `Cargar falta de ${pila(quien)}`, { email: quien.email, tipoAusencia: vac ? 'vacaciones' : 'ausencia', fecha: rg[0], hasta: rg[1], motivo: /medic/.test(n) ? 'Médico' : /enferm/.test(n) ? 'Enfermedad' : '' }), horas }]);
     }
+    return R(`¿Qué día no viene ${pila(quien)}? Escribilo así: "${pila(quien)} no viene el viernes 4 de diciembre a las 17".`);
+  }
+  // Avisa que alguien falta pero no reconozco el nombre: proponer los parecidos
+  if (!quien && avisaFalta && /no (viene|va a venir|vendra|puede venir)|se toma|vacaciones|enferm|licencia/.test(n)) {
+    const STOP = new Set(['que', 'no', 'viene', 'el', 'la', 'los', 'las', 'de', 'del', 'a', 'al', 'dia', 'hoy', 'manana', 'avisa', 'aviso', 'falta', 'vacaciones', 'por', 'para', 'hs', 'va', 'venir', 'esta', 'semana', ...DIAS_TXT, ...MESES_TXT]);
+    const nombres = palabras(texto).filter(w => w.length >= 3 && !/\d/.test(w) && !STOP.has(w));
+    const parecidos = activos().map(p => ({ p, d: Math.min(...nombres.map(w => Math.min(lev(w, sinTildes(p.nombre).split(' ')[0]), lev(w, sinTildes(p.apellido || '').split(' ')[0] || 'zzzz')))) }))
+      .filter(x => x.d <= 3).sort((a, b) => a.d - b.d).slice(0, 3);
+    const nombre = nombres[0] ? nombres[0][0].toUpperCase() + nombres[0].slice(1) : '';
+    return R(`No encontré a ${nombre ? `"${nombre}"` : 'esa persona'} en el staff.${parecidos.length ? ' ¿Es alguno de estos?' : ' Revisá cómo está escrito el nombre en Staff.'}`,
+      parecidos.map(x => { const t = texto.replace(new RegExp(nombres[0], 'i'), x.p.nombre.split(' ')[0]); return accion('preguntar', nombreCompleto(x.p), { texto: t }); }));
   }
   // Se olvidó de fichar
   if (quien && dice(ws, ['olvid', 'fichaj', 'fich'])) {
@@ -2028,13 +2077,19 @@ function responderLocal(texto) {
       [accion('ver_ficha', `Ver ficha de ${pila(quien)}`, { email: quien.email })]);
   }
   // Asistencia: llegadas tarde, horas, faltas
-  if (dice(ws, ['tarde', 'llego', 'llegada', 'horas', 'asisten', 'falto', 'faltas']) && !/a la tarde|por la tarde/.test(n)) {
+  if ((dice(ws, ['tarde', 'llego', 'llegada', 'horas', 'asisten']) || /\bfalto\b|\bfaltas\b|sin aviso/.test(n)) && !/a la tarde|por la tarde|cubr|reempl/.test(n)) {
     const ags = Object.fromEntries(S.personal.map(p => [p.email, agenda(p, S.clases)]));
     const res = resumenAsistencia(jornadas(S.fichajes, ags, Object.fromEntries(S.personal.map(p => [p.email, nombreCompleto(p)]))));
     const mes = MESES[+S.mesAsis.slice(5) - 1];
     if (quien) {
       const r = res.find(x => x.email === quien.email);
       return R(r ? `${pila(quien)} en ${mes}: ${r.dias} días, ${fmtMin(r.minutos)} trabajadas, ${r.tardes} llegada(s) tarde.` : `${pila(quien)} no tiene fichajes en ${mes}.`, [accion('ir', 'Ver asistencia', { tab: 'asistencia' })]);
+    }
+    // "faltas sin aviso", "quién faltó": las faltas del mes, para justificar
+    if (/falt|sin aviso/.test(n)) {
+      const fs = faltasMes();
+      return R(fs.length ? `Faltas sin aviso en ${mes}: ${listar(fs.map(x => `${x.nombre.split(' ')[0]} ${fechaCorta(x.fecha).slice(0, 5)}`), 6)}.` : `En ${mes} no hay faltas sin aviso.`,
+        [...fs.slice(0, 2).map(x => accion('justificar_falta', `Justificar ${x.nombre.split(' ')[0]} ${fechaCorta(x.fecha).slice(0, 5)}`, { email: x.email, fecha: x.fecha })), accion('ir', 'Ver asistencia', { tab: 'asistencia' })]);
     }
     const tardes = res.filter(x => x.tardes).sort((a, b) => b.tardes - a.tardes);
     return R(tardes.length ? `Llegadas tarde en ${mes}: ${listar(tardes.map(x => `${x.nombre.split(' ')[0]} (${x.tardes})`), 6)}.` : `En ${mes} nadie llegó tarde.`, [accion('ir', 'Ver asistencia', { tab: 'asistencia' })]);
@@ -2147,7 +2202,7 @@ async function ejecutarAccion(x, sinConfirmar = false) {
       return;
     }
     case 'habilitar_celular': { const p = persona(); if (p) habilitarCelular(p); return; }
-    case 'cargar_ausencia': return cargarAusencia(x.email, { tipo: x.tipoAusencia, desde: x.fecha, hasta: x.hasta, motivo: x.motivo });
+    case 'cargar_ausencia': return cargarAusencia(x.email, { tipo: x.tipoAusencia, desde: x.fecha, hasta: x.hasta, motivo: x.motivo, horas: x.horas || null });
     case 'fichaje_manual': return fichajeManual({ email: x.email, fecha: x.fecha, hora: x.desde, tipo: x.tipoFichaje });
     case 'justificar_falta': {
       const p = persona(); if (!p || !x.fecha) return;
