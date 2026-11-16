@@ -513,10 +513,49 @@ function verFicha(p) {
           ${p.dispositivo ? `<button class="btn sm ghost" id="fi-cel">${p.pedidoDispositivo?.id ? 'Habilitar el celular nuevo' : 'Habilitar otro celular'}</button>` : ''}</div>`}
       <div style="display:grid;gap:6px"><h4>Vacaciones y ausencias (todas)</h4>${histAus.length ? `<div class="lista">${histAus.map(a => `<div class="item"><span>${a.tipo === 'vacaciones' ? 'Vacaciones' : 'Ausencia'} · <span class="mono">${rangoTexto(a.desde, a.hasta)}</span> · ${textoDias(a.desde, a.hasta, p, S.clases)}</span><span class="pill ${a.estado}">${ESTADOS[a.estado]}</span></div>`).join('')}</div>` : '<p class="sub">Ninguna.</p>'}</div>
       <p class="sub">${MESES[+S.mesAsis.slice(5) - 1]}: <b class="mono">${js.length}</b> jornadas · <b class="mono">${fmtMin(mins)}</b> · <b class="mono ${faltas.length ? 'tarde' : ''}">${faltas.length}</b> falta(s) sin aviso${faltas.length ? ': ' + faltas.map(f => fechaCorta(f.fecha).slice(0, 5)).join(', ') : ''}</p>` })}
-    <div class="modal-pie"><button class="btn ghost" data-cerrar>Cerrar</button><button class="btn ghost" id="fi-aus">Cargar ausencia</button><button class="btn" id="fi-editar">Editar ficha</button></div>`, { ancho: true });
+    ${gemelos(p).length ? `<div class="aviso"><div><b>Esta persona está dos veces</b><span>También está la ficha ${gemelos(p).map(x => `<b>${esc(nombreCompleto(x))}</b> (${esc(sinCorreo(x) ? 'sin correo' : x.email)}${x.sinCelular ? ', ficha con PIN' : ''}${S.clases.some(c => c.profesor === x.email) ? `, ${S.clases.filter(c => c.profesor === x.email).length} clases` : ''})`).join(' y ')}.
+      Si esta es la que sobra, tocá <b>"Eliminar ficha"</b>: lo que tenga pasa a la otra y queda una sola.</span></div></div>` : ''}
+    <div class="modal-pie"><button class="btn ghost" id="fi-borrar" style="margin-right:auto;color:var(--accent)">Eliminar ficha</button><button class="btn ghost" data-cerrar>Cerrar</button><button class="btn ghost" id="fi-aus">Cargar ausencia</button><button class="btn" id="fi-editar">Editar ficha</button></div>`, { ancho: true });
   $('#fi-editar', m.el).onclick = () => { m.cerrar(); editarFicha(p); };
+  $('#fi-borrar', m.el).onclick = () => eliminarFicha(p, m);
   $('#fi-cel', m.el)?.addEventListener('click', () => { m.cerrar(); habilitarCelular(p); });
   $('#fi-aus', m.el).onclick = () => { m.cerrar(); cargarAusencia(p.email); };
+}
+
+// Otra ficha de la misma persona: mismo celular o mismo nombre y apellido
+const gemelos = p => S.personal.filter(x => x.email !== p.email && x.estado !== 'inactivo'
+  && ((normTel(p.telefono) && normTel(x.telefono) === normTel(p.telefono)) || sinTildes(nombreCompleto(x)) === sinTildes(nombreCompleto(p))));
+// Borra una ficha. Si la persona está repetida, todo lo que tenía (clases, faltas, reemplazos) pasa a la otra ficha.
+async function eliminarFicha(p, m) {
+  const otra = gemelos(p)[0];
+  const cs = S.clases.filter(c => c.profesor === p.email);
+  const aus = S.ausencias.filter(a => a.email === p.email);
+  const rs = S.reemplazos.filter(r => r.titular === p.email || r.reemplazo === p.email);
+  const cen = S.censo.filter(r => r.email === p.email);
+  const tiene = [cs.length && `${cs.length} clase(s)`, aus.length && `${aus.length} falta(s) o vacaciones`, rs.length && `${rs.length} reemplazo(s)`].filter(Boolean).join(', ');
+  const txt = otra
+    ? `Se borra esta ficha de <b>${esc(nombreCompleto(p))}</b> y queda solo la otra (${esc(sinCorreo(otra) ? 'sin correo' : otra.email)}).${tiene ? `<br>Lo que tenía esta (${tiene}) pasa a la otra ficha: no se pierde nada.` : ''}`
+    : `¿Borrar la ficha de <b>${esc(nombreCompleto(p))}</b>?${tiene ? `<br>Tiene ${tiene}: sus clases quedan sin profe y lo demás se borra.` : ''}<br><br>Si solo dejó de trabajar, conviene más <b>Editar ficha → Estado: Inactivo</b>, así no se pierde su historial.<br><b>Esto no se puede deshacer.</b>`;
+  if (!(await confirmar(txt, { si: otra ? 'Eliminar y dejar una sola' : 'Eliminar ficha', peligro: true }))) return;
+  const ops = [];
+  if (otra) {
+    const nombre = nombreCompleto(otra);
+    cs.forEach(c => ops.push({ c: 'clases', id: c.id, data: { profesor: otra.email, profesorNombre: nombre }, merge: true }));
+    aus.forEach(a => ops.push({ c: 'ausencias', id: a.id, data: { email: otra.email, nombre }, merge: true }));
+    rs.forEach(r => ops.push({ c: 'reemplazos', id: r.id, data: { ...(r.titular === p.email ? { titular: otra.email, titularNombre: nombre } : {}), ...(r.reemplazo === p.email ? { reemplazo: otra.email, reemplazoNombre: nombre } : {}) }, merge: true }));
+    cen.forEach(r => ops.push({ c: 'censo', id: r.id, borrar: true }));
+    const dec = [...new Set([...(otra.clasesDeclaradas || []), ...(p.clasesDeclaradas || [])])];
+    ops.push({ c: 'personal', id: otra.email, data: { clasesDeclaradas: dec, actividades: [...new Set([...(otra.actividades || []), ...(p.actividades || [])])], roles: [...new Set([...(otra.roles || []), ...(p.roles || [])])] }, merge: true });
+  } else {
+    cs.forEach(c => ops.push({ c: 'clases', id: c.id, data: { profesor: '', profesorNombre: '' }, merge: true }));
+    aus.forEach(a => ops.push({ c: 'ausencias', id: a.id, borrar: true }));
+    rs.forEach(r => ops.push({ c: 'reemplazos', id: r.id, borrar: true }));
+    cen.forEach(r => ops.push({ c: 'censo', id: r.id, borrar: true }));
+  }
+  ops.push({ c: 'personal', id: p.email, borrar: true });
+  try { await lote(ops); } catch (e) { console.error(e); return toast('No se pudo eliminar', true); }
+  m.cerrar();
+  toast(otra ? `Listo: ${nombreCompleto(otra)} quedó con una sola ficha` : 'Ficha eliminada');
 }
 
 async function habilitarCelular(p) {
