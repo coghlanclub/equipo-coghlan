@@ -1206,7 +1206,14 @@ function enlazarNecesidades(v, listo) {
   $$('[data-asignar-ext]', v).forEach(b => b.onclick = async () => { await asignarExterno(JSON.parse(b.dataset.n), b.dataset.asignarExt); ok(); });
   $$('[data-libre]', v).forEach(b => b.onclick = async () => { await asignarExterno(JSON.parse(b.dataset.libre), '__libre'); ok(); });
   $$('[data-quitar-r]', v).forEach(b => b.onclick = async () => { await borrar('reemplazos', b.dataset.quitarR); toast('Reemplazo quitado'); ok(); });
-  $$('[data-mas]', v).forEach(b => b.onclick = () => { b.closest('.nec').querySelectorAll('.cand[hidden]').forEach(c => { c.hidden = false; }); b.remove(); });
+  $$('[data-mas]', v).forEach(b => b.onclick = () => { b.closest('.nec').querySelectorAll('.cand-fila[hidden]').forEach(c => { c.hidden = false; }); b.remove(); });
+  // "Una parte": abre las horas debajo de esa persona; se marcan tocándolas
+  $$('[data-parte]', v).forEach(b => b.onclick = () => { const x = b.closest('.cand-fila').querySelector('.cf-parte'); x.hidden = !x.hidden; b.setAttribute('aria-expanded', !x.hidden); });
+  $$('[data-hrp]', v).forEach(b => b.onclick = () => b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true'));
+  $$('[data-asignar-parte]', v).forEach(b => b.onclick = async () => {
+    const hs = $$('[data-hrp][aria-pressed="true"]', b.closest('.cf-parte')).map(x => x.dataset.hrp.split('|'));
+    await asignarPartes(JSON.parse(b.dataset.n), b.dataset.asignarParte, hs); if (hs.length) ok();
+  });
   $$('[data-manual]', v).forEach(b => b.onclick = () => { ok(); asignarManual(JSON.parse(b.dataset.manual)); });
   $$('[data-ext]', v).forEach(b => b.onclick = () => { ok(); verExterno(EXT(b.dataset.ext)); });
   $$('[data-ficha]', v).forEach(b => b.onclick = () => { ok(); verFicha(P(b.dataset.ficha)); });
@@ -1245,46 +1252,79 @@ function vHistorialRem(v) {
   enlazarFichas(v);
 }
 
+// Un turno para cubrir, de un vistazo: a quién se cubre, la barra de horas y una lista simple de quién puede.
+// Cada persona tiene "Cubre todo" (un toque) y "Una parte" (elegís las horas). Lo que falta queda en rojo.
 function htmlNecesidad(n) {
   const nd = esc(JSON.stringify({ fecha: n.fecha, dia: n.dia, desde: n.desde, hasta: n.hasta, rol: n.rol, actividad: n.actividad, sede: n.sede, claseId: n.claseId, titular: n.titular, ausenciaId: n.ausenciaId, ...(n.generico ? { generico: true } : {}) }));
-  const cab = `<div class="nec-cab"><b>${fechaLarga(n.fecha)}</b>${n.generico ? '<span class="pill neutro" title="Ese día no figura en su horario: confirmá el horario con la persona">horario a confirmar</span>' : `<span class="mono">${n.desde}–${n.hasta}</span>`}<span class="rol rol-${n.rol}">${ROL_CORTO[n.rol]}</span><span>${esc(n.rol === 'clases' ? queCubre(n) : ROLES[n.rol])}</span></div>`;
   const rs = reemplazosDe(n, S.reemplazos);
   const falta = faltaCubrir(n, S.reemplazos);
-  // Quiénes ya cubren (todo el turno o una parte)
-  const partes = rs.map(r => {
-    const q = !r.externo && P(r.reemplazo), tel = q?.telefono || r.reemplazoTel;
-    const parcial = rs.length > 1 || falta.length || r.desde !== n.desde || r.hasta !== n.hasta;
-    return `<div class="acciones"><span class="pill ${esLibre(r) ? 'neutro' : r.externo ? 'ext' : 'cubierto'}">${parcial ? `<span class="mono">${r.desde}–${r.hasta}</span> · ` : ''}${esLibre(r) ? 'Queda libre (sin profe)' : `Cubre ${esc(nomR(r))}${r.externo ? ' · externo' : ''}`}</span>
-      ${tel ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(tel, textoReemplazo({ ...n, desde: r.desde, hasta: r.hasta }, q || { nombre: r.reemplazoNombre.split(' ')[0] }))}">WhatsApp</a>` : ''}
-      ${q ? `<button class="btn sm ghost" data-ficha="${esc(r.reemplazo)}">Ficha</button>` : ''}<button class="btn sm ghost" data-quitar-r="${r.id}">Quitar</button></div>`;
-  }).join('');
-  // Barra del turno: cada parte con el color de quien la cubre, lo que falta en rojo
+  const tit = P(n.titular), pilaTit = (tit?.nombre || nom(n.titular)).split(' ')[0];
+  const minFalta = falta.reduce((t, [d, h]) => t + min(h) - min(d), 0);
+  const estado = n.generico ? (falta.length ? '<span class="pill pendiente">Horario a confirmar</span>' : '<span class="pill cubierto">Cubierto</span>')
+    : falta.length ? `<span class="pill sin">Falta ${horasTxt(minFalta)}</span>` : '<span class="pill cubierto">✓ Cubierto</span>';
+  const cab = `<div class="nec-top"><div class="avatar" style="${estiloAvatar(n.titular)}">${esc(iniciales(tit || {}))}</div>
+    <div><b>${falta.length ? 'Hay que cubrir a' : 'Cubierto:'} ${esc(nom(n.titular))}</b><span class="sub">${fechaLarga(n.fecha)} · ${esc(n.rol === 'clases' ? queCubre(n) : ROLES[n.rol])} · ${n.generico ? 'horario a confirmar con la persona' : `${n.desde} a ${n.hasta}`}</span></div>${estado}</div>`;
+  // Barra del turno con las horas marcadas: verde/azul/violeta quien cubre, rojo lo que falta
   const largo = min(n.hasta) - min(n.desde);
-  const tramo = (d, h, estilo, txt, k) => `<div class="${k ? 'est-' + k : ''}" style="left:${(min(d) - min(n.desde)) * 100 / largo}%;width:${(min(h) - min(d)) * 100 / largo}%;${estilo}" title="${esc(txt)}">${esc(txt)}</div>`;
-  const barra = n.generico || !largo ? '' : `<div class="rem-barra">${rs.map(r => tramo(r.desde, r.hasta, '', `${esLibre(r) ? 'Queda libre' : nomR(r).split(' ')[0]} ${r.desde}–${r.hasta}`, estadoR(r))).join('')}
-    ${falta.map(([d, h]) => tramo(d, h, '', `Falta ${d}–${h}`, 'falta')).join('')}</div>`;
+  const pos = t => (min(t) - min(n.desde)) * 100 / largo;
+  const tramo = (d, h, txt, k) => `<div class="est-${k}" style="left:${pos(d)}%;width:${pos(h) - pos(d)}%" title="${esc(txt)}">${esc(txt)}</div>`;
+  const marcas = []; for (let m = Math.ceil(min(n.desde) / 60) * 60; m <= min(n.hasta); m += 60) marcas.push(m);
+  const barra = n.generico || !largo ? '' : `<div><div class="rem-barra nec-barra">${rs.map(r => tramo(r.desde, r.hasta, `${esLibre(r) ? 'Sin profe' : nomR(r).split(' ')[0] + ' cubre'} ${r.desde}–${r.hasta}`, estadoR(r))).join('')}
+    ${falta.map(([d, h]) => tramo(d, h, `Falta ${d}–${h}`, 'falta')).join('')}</div>
+    ${marcas.length > 1 ? `<div class="nec-escala">${marcas.map(m => `<span style="left:${pos(hhmm(m))}%">${hhmm(m).slice(0, 2)}</span>`).join('')}</div>` : ''}</div>`;
+  // Quién ya cubre, en una frase
+  const partes = rs.length ? `<div class="lista">${rs.map(r => {
+    const q = !r.externo && P(r.reemplazo), tel = q?.telefono || r.reemplazoTel;
+    return `<div class="item fila-est ${estadoR(r)}"><span>${esLibre(r) ? `De <b class="mono">${r.desde} a ${r.hasta}</b> queda <b>sin profe</b>` : `<b>${esc(nomR(r))}</b>${r.externo ? ' <span class="pill ext">externo</span>' : ''} cubre a ${esc(pilaTit)} de <b class="mono">${r.desde} a ${r.hasta}</b>`}</span>
+      <div class="acciones">${tel ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(tel, textoReemplazo({ ...n, desde: r.desde, hasta: r.hasta }, q || { nombre: r.reemplazoNombre.split(' ')[0] }))}">WhatsApp</a>` : ''}<button class="btn sm ghost" data-quitar-r="${r.id}">Quitar</button></div></div>`;
+  }).join('')}</div>` : '';
   if (!falta.length) return `<div class="nec">${cab}${barra}${partes}</div>`;
-  // Si ya lo cubren en parte, se buscan libres para lo que falta (no para el turno entero)
-  const cs = candidatos(rs.length ? { ...n, desde: falta[0][0], hasta: falta[0][1] } : n, S.personal, S.ausencias, S.reemplazos, S.clases);
+
+  // Quién puede: staff libre primero (el que dijo que puede, arriba), después externos
+  const cs = candidatos(rs.length ? { ...n, desde: falta[0][0], hasta: falta[0][1] } : n, S.personal, S.ausencias, S.reemplazos, S.clases)
+    .sort((a, b) => (b.disponible ? 1 : 0) - (a.disponible ? 1 : 0) || a.carga - b.carga);
   const [fd, fh] = falta[0][0] ? falta[0] : [n.desde || '00:00', n.hasta || '23:59'];
   const exts = externos().filter(x => (x.acts || []).includes(queAct(n)) && libreExt(x, n.fecha, fd, fh));
-  const htmlExt = exts.length ? `<span class="eyebrow" style="color:var(--ext)">Externos que dan ${esc(queAct(n))} (no son staff)</span><div class="cands">${exts.map(x => `<div class="cand cand-ext">
-      <div class="persona"><div class="avatar av-ext">${esc(x.nombre.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase())}</div><div><b>${esc(x.nombre)}</b><span class="sub mono">${esc(x.tel || 'sin teléfono')}</span>${x.disp ? `<span class="sub">${esc(x.disp)}</span>` : ''}</div></div>
-      <div class="acciones">${x.tel ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(x.tel, textoReemplazo(n, { nombre: x.nombre.split(' ')[0] }))}">WhatsApp</a>` : ''}<button class="btn sm ghost" data-ext="${esc(x.id)}">Ficha</button>
-        <button class="btn sm ext" data-asignar-ext="${esc(x.id)}" data-n="${nd}">Asignar</button></div></div>`).join('')}</div>` : '';
+  // Horas que se pueden elegir para cubrir una parte (de a 1 hora)
+  const horas = n.generico ? [] : falta.flatMap(([d, h]) => enClasesDeUnaHora(d, h));
+  const queTodo = rs.length ? 'Cubre lo que falta' : 'Cubre todo';
+  const fila = (k, id, nombre, ini, etiqueta, info, tel, quienTxt, i) => `<div class="cand-fila ${k === 'ext' ? 'ext' : ''}" ${i >= 4 ? 'hidden' : ''}>
+      <div class="avatar ${k === 'ext' ? 'av-ext' : ''}" ${k === 'ext' ? '' : `style="${estiloAvatar(id)}"`}>${esc(ini)}</div>
+      <div class="cf-tx"><span class="cf-nom"><b>${esc(nombre)}</b> ${etiqueta}</span><span class="sub">${info}</span></div>
+      <div class="acciones"><button class="btn sm ${k === 'ext' ? 'ext' : 'ok'}" data-${k === 'ext' ? 'asignar-ext' : 'asignar-r'}="${esc(id)}" data-n="${nd}">${queTodo}</button>
+        ${horas.length > 1 ? `<button class="btn sm ghost" data-parte>Una parte</button>` : ''}
+        ${tel ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(tel, textoReemplazo(n, { nombre: nombre.split(' ')[0] }))}" aria-label="WhatsApp a ${esc(nombre)}">WhatsApp</a>` : ''}</div>
+      ${horas.length > 1 ? `<div class="cf-parte" hidden><span class="sub">Tocá las horas que cubre ${esc(nombre.split(' ')[0])}:</span>
+        <div class="checks">${horas.map(([d, h]) => `<button type="button" class="chip-hr" data-hrp="${d}|${h}" aria-pressed="false"><span class="mono">${d}–${h}</span></button>`).join('')}</div>
+        <div class="acciones" style="justify-content:flex-start"><button class="btn sm ${k === 'ext' ? 'ext' : 'ok'}" data-asignar-parte="${esc(quienTxt)}" data-n="${nd}">Asignar esas horas</button></div></div>` : ''}
+    </div>`;
+  const filas = [
+    ...cs.map(({ p, carga, disponible }, i) => fila('stf', p.email, nombreCompleto(p), iniciales(p),
+      `${i === 0 ? '<span class="pill cubierto">Recomendado</span> ' : ''}<span class="pill neutro">Staff</span>`,
+      `${disponible ? 'Dijo que puede a esa hora · ' : 'Libre a esa hora · '}${carga ? `ya cubrió ${carga} este mes` : 'no cubrió nada este mes'}`, p.telefono, p.email, i)),
+    ...exts.map((x, i) => fila('ext', x.id, x.nombre, x.nombre.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase(),
+      `${!cs.length && i === 0 ? '<span class="pill cubierto">Recomendado</span> ' : ''}<span class="pill ext">Externo</span>`,
+      `${x.disp ? esc(x.disp) + ' · ' : ''}no es staff`, x.tel, 'ext|' + x.id, cs.length + i)),
+  ];
   return `<div class="nec">${cab}${barra}${partes}
-    ${cs.length ? `<span class="eyebrow" style="color:var(--ok)">Staff libre</span><div class="cands">${cs.map(({ p, carga, disponible }, i) => `<div class="cand" ${i >= 3 ? 'hidden' : ''}>
-        <div class="persona"><div class="avatar">${esc(iniciales(p))}</div><div><b>${esc(nombreCompleto(p))}</b><span class="sub mono">${esc(p.telefono || 'sin teléfono')}</span><span class="sub">${esc(p.email)}</span></div></div>
-        <span class="sub">${disponible ? '<span class="pill aprobada">Dijo que puede cubrir en ese horario</span> ' : ''}${carga ? `Ya cubre ${carga} este mes` : 'Sin reemplazos este mes'}</span>
-        <div class="acciones">
-          ${p.telefono ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(p.telefono, textoReemplazo(n, p))}">WhatsApp</a>` : ''}
-          <a class="btn sm ghost" href="${mailto(p.email, '', `Reemplazo ${fechaCorta(n.fecha)} ${n.desde}`, textoReemplazo(n, p))}">Correo</a>
-          <button class="btn sm ghost" data-ficha="${esc(p.email)}">Ficha</button>
-          <button class="btn sm" data-asignar-r="${esc(p.email)}" data-n="${nd}">${rs.length ? 'Asignar lo que falta' : 'Asignar'}</button></div></div>`).join('')}</div>
-      ${cs.length > 3 ? `<button class="btn sm ghost" data-mas style="justify-self:start">Ver ${cs.length - 3} más</button>` : ''}`
-    : `<div class="aviso ${exts.length ? '' : 'mal'}"><div><b>Nadie del staff libre con ese perfil.</b><span>No hay ${n.rol === 'clases' ? `profes que den ${esc(n.actividad)}` : esc(ROLES[n.rol].toLowerCase())} del staff libres en ese horario.${exts.length ? ' Abajo están los externos.' : ' Podés cargar a otra persona (queda guardada en Externos).'}</span></div></div>`}
-    ${htmlExt}
-    <div class="acciones"><button class="btn sm ghost" data-manual="${nd}">Cubrir por partes u otra persona</button><button class="btn sm ghost" data-libre="${nd}">Dejar sin profe</button></div></div>`;
+    <b class="nec-preg">¿Quién cubre a ${esc(pilaTit)}${rs.length ? ' lo que falta' : ''}?</b>
+    ${filas.length ? `<div class="cand-lista">${filas.join('')}</div>${filas.length > 4 ? `<button class="btn sm ghost" data-mas style="justify-self:start">Ver ${filas.length - 4} más</button>` : ''}`
+      : `<div class="aviso mal"><div><b>No hay nadie libre que dé ${esc(queAct(n))} a esa hora.</b><span>Tocá "+ Otra persona" para cargar a alguien (queda guardado en Externos).</span></div></div>`}
+    <div class="acciones" style="justify-content:flex-start"><button class="btn sm ghost" data-manual="${nd}">+ Otra persona</button><button class="btn sm ghost" data-libre="${nd}">Que quede sin profe</button></div></div>`;
+}
+
+// Cubre solo las horas elegidas ("ext|id" para externos o el correo para alguien del staff)
+async function asignarPartes(n, quienTxt, horas) {
+  if (!horas.length) return toast('Tocá al menos una hora', true);
+  const x = quienTxt.startsWith('ext|') ? EXT(quienTxt.slice(4)) : null, q = x ? null : P(quienTxt);
+  if (!x && !q) return toast('No encontré a esa persona', true);
+  const quien = x ? { reemplazo: x.id, reemplazoNombre: x.nombre, reemplazoTel: x.tel || '', externo: true } : { reemplazo: q.email, reemplazoNombre: nombreCompleto(q) };
+  // Horas seguidas van juntas: 07–08 y 08–09 = 07–09
+  const bl = [];
+  for (const [d, h] of horas.sort((a, b) => min(a[0]) - min(b[0]))) { const l = bl[bl.length - 1]; if (l && l[1] === d) l[1] = h; else bl.push([d, h]); }
+  try { await lote(bl.map(([d, h]) => ({ c: 'reemplazos', id: Math.random().toString(36).slice(2, 14), data: docReemplazo(n, quien, d, h) }))); }
+  catch { return toast('No se pudo asignar', true); }
+  toast(`${quien.reemplazoNombre.split(' ')[0]} cubre de ${bl.map(([d, h]) => `${d} a ${h}`).join(' y ')}`);
 }
 
 // Guarda un reemplazo de una parte del turno (por defecto, el turno entero)

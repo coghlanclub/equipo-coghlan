@@ -370,6 +370,9 @@ td.num, th.num { text-align: right; }
 .rem-barra .ahora { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--fg); z-index: 2; pointer-events: none; }
 .linea-dia .rem-barra { height: 30px; }
 .ld-ext { color: var(--ext) !important; }
+.chip-hr[data-hrp] { text-decoration: none; }
+.chip-hr[data-hrp][aria-pressed="true"] { background: var(--ok-soft); color: var(--ok); border: 2px solid var(--ok); }
+.cand-fila.ext .chip-hr[data-hrp][aria-pressed="true"] { background: var(--ext-soft); color: var(--ext); border-color: var(--ext); }
 .pill.ext { background: var(--ext-soft); color: var(--ext); }
 .btn.ext { background: var(--ext); border-color: var(--ext); color: #fff; }
 .cuenta.ext { background: var(--ext); }
@@ -404,7 +407,28 @@ td.num, th.num { text-align: right; }
 .grilla th.hoy { background: var(--fg); color: var(--bg); }
 .grilla td.hoy { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .chip-sel { border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); border-radius: 99px; padding: 5px 11px; font: inherit; font-size: .82rem; cursor: pointer; }
-.chip-hr { border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: .84rem; cursor: pointer; text-decoration: line-through; }
+/* Turno para cubrir: a quién, barra de horas y lista de quién puede */
+.nec-top { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.nec-top > div:nth-child(2) { flex: 1; min-width: 200px; display: grid; gap: 2px; }
+.nec-top b { font-size: 1.05rem; }
+.nec-barra { height: 38px; }
+.nec-barra > div { font-weight: 700; }
+.nec-escala { position: relative; height: 16px; font: 600 .68rem var(--f-mono); color: var(--muted); margin-top: 2px; }
+.nec-escala span { position: absolute; transform: translateX(-50%); }
+.nec-escala span:first-child { transform: none; }
+.nec-escala span:last-child { transform: translateX(-100%); }
+.nec-preg { font-size: .98rem; }
+.cand-lista { display: grid; border: 1px solid var(--line); border-radius: var(--radio); overflow: hidden; }
+.cand-fila { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-top: 1px solid var(--line); flex-wrap: wrap; background: var(--bg); }
+.cand-fila:first-child { border-top: 0; }
+.cand-fila.ext { background: color-mix(in srgb, var(--ext) 6%, var(--bg)); }
+.cand-fila .cf-tx { flex: 1; min-width: 190px; display: grid; gap: 2px; }
+.cand-fila .cf-nom { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.cand-fila .pill { font-size: .66rem; }
+.cf-parte { flex-basis: 100%; display: grid; gap: 8px; padding: 6px 0 2px 48px; }
+@media (max-width: 560px) { .cf-parte { padding-left: 0; } }
+.chip-hr[data-hrp][aria-pressed="true"]::before { content: "Cubre · "; }
+.chip-hr {border: 1px solid var(--line); background: var(--surface-2); color: var(--muted); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: .84rem; cursor: pointer; text-decoration: line-through; }
 .chip-hr[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border: 2px dashed var(--accent); font-weight: 700; text-decoration: none; }
 .chip-hr[aria-pressed="true"]::before { content: "No viene · "; }
 .chip-sel[aria-pressed="true"] { background: var(--ext-soft); color: var(--ext); border-color: var(--ext); font-weight: 700; }
