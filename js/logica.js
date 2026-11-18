@@ -44,12 +44,12 @@ const G = [
   ['Anexo', '08:00', 'Indoor Cycle', [1, 3, 5]],
   ['Anexo', '09:00', 'Funcional', [1, 2, 3, 4, 5]],
   ['Anexo', '09:30', 'Yoga Integral', [5]],
-  ['Anexo', '10:00', 'Power Funcional', [1, 3, 5]],
+  ['Anexo', '10:00', 'Fuerza y Calistenia', [1, 3, 5]],
   ['Anexo', '10:00', 'Funcional', [2, 4]],
   ['Anexo', '10:00', 'Fuerza en Movimiento', [6]],
-  ['Anexo', '10:30', 'Yoga Dinámico', [1]],
+  ['Anexo', '10:30', 'Hatha Yoga', [1]],
   ['Anexo', '10:30', 'Yoga Integral', [3, 5]],
-  ['Anexo', '11:00', 'Funcional', [1, 2, 3, 4, 5]],
+  ['Anexo', '11:00', 'Calistenia', [1, 2, 3, 4, 5]],
   ['Anexo', '11:00', 'Indoor Cycle', [6]],
   ['Anexo', '12:00', 'Fuerza en Movimiento', [1, 2, 3, 4, 5]],
   ['Anexo', '12:00', 'Indoor Cycle', [6]],
@@ -65,12 +65,22 @@ const G = [
   ['Anexo', '20:00', 'Boxeo', [2, 4]],
 
   ['Aranceladas', '08:30', 'Gimnasia Rítmica y Expresiva', [1, 3, 5]],
+  ['Aranceladas', '08:30', 'Tai-Chi', [1, 3]],
   ['Aranceladas', '08:45', 'Jiu-Jitsu', [2, 4]],
   ['Aranceladas', '10:00', 'Gimnasia Rítmica y Expresiva', [1, 3, 5]],
   ['Aranceladas', '18:00', 'Taekwondo Infantil', [1, 3, 5]],
   ['Aranceladas', '19:00', 'Taekwondo Infantil', [1, 3, 5]],
   ['Aranceladas', '20:00', 'Taekwondo', [1, 3, 5]],
   ['Aranceladas', '20:00', 'Karate', [2, 4]],
+  ['Aranceladas', '20:30', 'Kickboxing Muay Thai', [2, 4]],
+];
+// Versión de la grilla oficial: al subirla, gerencia corrige sola las clases que cambiaron de nombre y suma las nuevas
+export const GRILLA_VERSION = 2;
+export const GRILLA_RENOMBRES = [
+  // [sede, hora, días, nombre viejo, nombre nuevo]
+  ['Anexo', '10:00', [1, 3, 5], 'Power Funcional', 'Fuerza y Calistenia'],
+  ['Anexo', '10:30', [1], 'Yoga Dinámico', 'Hatha Yoga'],
+  ['Anexo', '11:00', [1, 2, 3, 4, 5], 'Funcional', 'Calistenia'],
 ];
 
 export function slug(s) {

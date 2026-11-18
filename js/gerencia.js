@@ -5,7 +5,7 @@ import {
   hoy, iso, deIso, mesDe, sumarDias, rangoTexto, diasDeTrabajo, textoDias, fechaLarga, fechaCorta, min, seSolapan, nombreCompleto, iniciales,
   activo, agenda, bloquesAgenda, resumenSemana, necesidades, tipoReemplazo, cubierto, reemplazosDe, faltaCubrir, candidatos, huecos, conflictos, ausenteEn, jornadas, resumenAsistencia,
   horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
-  faltasSinAviso, sinCorreo, rangoFechas, normTel, textoHoras, tocaHoras, HORARIO_CLUB, hhmm, FRANJAS, enClasesDeUnaHora,
+  faltasSinAviso, sinCorreo, rangoFechas, normTel, GRILLA_VERSION, GRILLA_RENOMBRES, textoHoras, tocaHoras, HORARIO_CLUB, hhmm, FRANJAS, enClasesDeUnaHora,
 } from './logica.js';
 import { enviarCorreo, envioAutomatico, destinos } from './correo.js';
 import { CORREO_GERENCIA } from './config.js';
@@ -50,7 +50,7 @@ alCambiarUsuario(async u => {
     escuchar('admins', [], d => { S.admins = d; pintar(); }, err),
     escuchar('recepcion', [], d => { S.recepcion = d; pintar(); }, err),
     escuchar('censo', [], d => { S.censo = d; pintar(); }, err),
-    escucharDoc('config', 'general', c => { S.config = c || {}; pintar(); }),
+    escucharDoc('config', 'general', c => { S.config = c || {}; S.configListo = true; pintar(); }),
     escucharDoc('config', 'externos', c => { S.externos = c?.lista || []; S.extListo = true; pintar(); }),
     escuchar('fichajes', [['fecha', '==', hoy()]], d => { S.fichajesHoy = d; pintar(); }, err),
   );
@@ -131,9 +131,45 @@ function resolver(n) {
 // ---------- Corrección automática de la grilla ----------
 // Las clases duran 1 hora: si quedó cargada una clase de varias horas (de antes, o a mano) se parte sola
 // en clases de 1 hora, y si una persona tiene la misma clase repetida a la misma hora se deja una sola.
-let corrigiendo = false, limpiandoCenso = false, guardandoExt = false;
+let corrigiendo = false, limpiandoCenso = false, guardandoExt = false, actualizandoGrilla = false;
+// La agenda oficial cambió: renombra las clases (con su profe, sus reemplazos que vienen y las fichas) y suma las que faltan
+async function actualizarGrillaOficial() {
+  actualizandoGrilla = true;
+  const ops = [], cambio = {}, nombres = [], h = hoy();
+  for (const [sede, desde, dias, viejo, nuevo] of GRILLA_RENOMBRES) {
+    for (const c of S.clases.filter(c => c.sede === sede && c.desde === desde && dias.includes(c.dia) && c.actividad === viejo)) {
+      const { id, ...datos } = c, nid = idClase({ ...datos, actividad: nuevo });
+      cambio[id] = nid;
+      if (!S.clases.some(x => x.id === nid)) ops.push({ c: 'clases', id: nid, data: { ...datos, actividad: nuevo } });
+      ops.push({ c: 'clases', id, borrar: true });
+      if (!nombres.includes(`${viejo} → ${nuevo}`)) nombres.push(`${viejo} → ${nuevo}`);
+      // Los reemplazos que vienen de esa clase siguen valiendo con el nombre nuevo
+      for (const r of S.reemplazos.filter(r => r.fecha >= h && r.titular === c.profesor && r.actividad === viejo && (r.turnoDesde || r.desde) === desde && deIso(r.fecha).getDay() === c.dia))
+        ops.push({ c: 'reemplazos', id: r.id, data: { actividad: nuevo, claseId: nid }, merge: true });
+      // El profe pasa a figurar que da la actividad nueva
+      const p = c.profesor && P(c.profesor);
+      if (p && !(p.actividades || []).includes(nuevo)) { p.actividades = [...(p.actividades || []), nuevo]; ops.push({ c: 'personal', id: p.email, data: { actividades: p.actividades }, merge: true }); }
+    }
+  }
+  for (const p of S.personal) {
+    const dec = p.clasesDeclaradas || [];
+    if (dec.some(id => cambio[id])) ops.push({ c: 'personal', id: p.email, data: { clasesDeclaradas: dec.map(id => cambio[id] || id) }, merge: true });
+  }
+  // Clases nuevas de la agenda oficial (sin profe todavía)
+  const existentes = new Set([...S.clases.map(c => c.id), ...Object.values(cambio)]);
+  const nuevas = GRILLA_BASE.filter(c => !existentes.has(c.id) && !Object.keys(cambio).includes(c.id));
+  nuevas.forEach(c => ops.push({ c: 'clases', id: c.id, data: c }));
+  ops.push({ c: 'config', id: 'general', data: { grillaVersion: GRILLA_VERSION }, merge: true });
+  try {
+    await lote(ops);
+    const acts = [...new Set(nuevas.map(c => c.actividad))];
+    if (nombres.length || nuevas.length) toast(`Actualicé la grilla con la agenda oficial${nombres.length ? ': ' + nombres.join(', ') : ''}${nuevas.length ? `${nombres.length ? ' y' : ':'} ${nuevas.length} clase(s) nueva(s) (${acts.join(', ')})` : ''}. Los profes asignados se mantienen.`);
+  } catch (e) { console.error('No se pudo actualizar la grilla', e); }
+  actualizandoGrilla = false;
+}
 async function corregirGrilla() {
   if (corrigiendo || !S.listo) return; // Gerencia solo abre para cuentas de gerencia
+  if (S.configListo && (S.config.grillaVersion || 0) < GRILLA_VERSION && !actualizandoGrilla) return actualizarGrillaOficial();
   const largas = S.clases.filter(c => c.desde && c.hasta && min(c.hasta) - min(c.desde) > DURACION_CLASE);
   const vistas = new Map(), repetidas = [];
   for (const c of [...S.clases].filter(c => !largas.includes(c)).sort((a, b) => (a.profesor ? 0 : 1) - (b.profesor ? 0 : 1) || a.id.localeCompare(b.id))) {
