@@ -131,7 +131,51 @@ function resolver(n) {
 // ---------- Corrección automática de la grilla ----------
 // Las clases duran 1 hora: si quedó cargada una clase de varias horas (de antes, o a mano) se parte sola
 // en clases de 1 hora, y si una persona tiene la misma clase repetida a la misma hora se deja una sola.
-let corrigiendo = false, limpiandoCenso = false, guardandoExt = false, actualizandoGrilla = false;
+let corrigiendo = false, limpiandoCenso = false, guardandoExt = false, actualizandoGrilla = false, vinculando = false;
+// Las actividades que cambiaron de nombre en la agenda oficial
+const ACT_RENOMBRADAS = { 'Power Funcional': 'Fuerza y Calistenia' };
+// Código viejo → código nuevo de las clases renombradas (para lo que los profes marcaron antes)
+const RENOMBRE_ID = Object.fromEntries(GRILLA_RENOMBRES.flatMap(([sede, desde, dias, viejo, nuevo]) => dias.map(dia => [idClase({ sede, dia, desde, actividad: viejo }), idClase({ sede, dia, desde, actividad: nuevo })])));
+// El censo y la grilla siempre conectados:
+// - si un profe (con la ficha aprobada) marcó en el censo una clase que está sin profe, queda a su nombre;
+// - si marcó una clase que ya no existe (cambió de nombre), se pasa a la clase de ese mismo día, hora y sede;
+// - las actividades viejas de su ficha pasan al nombre nuevo.
+function revisarVinculo() {
+  const ops = [], asignadas = [], remapeadas = [], acts = [];
+  const tomadas = new Set();
+  for (const p of S.personal.filter(p => p.estado === 'activo')) {
+    let dec = [...(p.clasesDeclaradas || [])], cambio = false;
+    dec = dec.map(id => {
+      if (S.clases.some(c => c.id === id) || !RENOMBRE_ID[id] || !S.clases.some(c => c.id === RENOMBRE_ID[id])) return id;
+      cambio = true; remapeadas.push(nombreCompleto(p)); return RENOMBRE_ID[id];
+    });
+    if (cambio) ops.push({ c: 'personal', id: p.email, data: { clasesDeclaradas: [...new Set(dec)] }, merge: true });
+    for (const id of dec) {
+      const c = S.clases.find(x => x.id === id);
+      if (c && !c.profesor && !tomadas.has(c.id)) {
+        tomadas.add(c.id);
+        ops.push({ c: 'clases', id: c.id, data: { profesor: p.email, profesorNombre: nombreCompleto(p) }, merge: true });
+        asignadas.push(`${c.actividad} ${DIAS_CORTOS[c.dia]} ${c.desde} → ${(p.nombre || '').split(' ')[0]}`);
+      }
+    }
+    const viejas = (p.actividades || []).filter(a => ACT_RENOMBRADAS[a]);
+    if (viejas.length) {
+      ops.push({ c: 'personal', id: p.email, data: { actividades: [...new Set((p.actividades || []).map(a => ACT_RENOMBRADAS[a] || a))] }, merge: true });
+      acts.push(nombreCompleto(p));
+    }
+  }
+  return { ops, asignadas, remapeadas, acts };
+}
+async function vincularCenso() {
+  const { ops, asignadas, remapeadas, acts } = revisarVinculo();
+  if (!ops.length) return;
+  vinculando = true;
+  try {
+    await lote(ops);
+    toast(`Conecté el censo con la grilla: ${[asignadas.length && `${asignadas.length} clase(s) asignadas a quien las marcó en el censo`, remapeadas.length && `${remapeadas.length} clase(s) del censo actualizadas`, acts.length && `actividades actualizadas de ${acts.length} profe(s)`].filter(Boolean).join(', ')}.`);
+  } catch (e) { console.error(e); }
+  vinculando = false;
+}
 // La agenda oficial cambió: renombra las clases (con su profe, sus reemplazos que vienen y las fichas) y suma las que faltan
 async function actualizarGrillaOficial() {
   actualizandoGrilla = true;
@@ -140,8 +184,10 @@ async function actualizarGrillaOficial() {
     for (const c of S.clases.filter(c => c.sede === sede && c.desde === desde && dias.includes(c.dia) && c.actividad === viejo)) {
       const { id, ...datos } = c, nid = idClase({ ...datos, actividad: nuevo });
       cambio[id] = nid;
-      if (!S.clases.some(x => x.id === nid)) ops.push({ c: 'clases', id: nid, data: { ...datos, actividad: nuevo } });
-      ops.push({ c: 'clases', id, borrar: true });
+      const ya = S.clases.find(x => x.id === nid);
+      if (!ya) ops.push({ c: 'clases', id: nid, data: { ...datos, actividad: nuevo } });
+      else if (!ya.profesor && c.profesor) ops.push({ c: 'clases', id: nid, data: { profesor: c.profesor, profesorNombre: c.profesorNombre || nom(c.profesor) }, merge: true });
+      if (nid !== id) ops.push({ c: 'clases', id, borrar: true });
       if (!nombres.includes(`${viejo} → ${nuevo}`)) nombres.push(`${viejo} → ${nuevo}`);
       // Los reemplazos que vienen de esa clase siguen valiendo con el nombre nuevo
       for (const r of S.reemplazos.filter(r => r.fecha >= h && r.titular === c.profesor && r.actividad === viejo && (r.turnoDesde || r.desde) === desde && deIso(r.fecha).getDay() === c.dia))
@@ -170,6 +216,7 @@ async function actualizarGrillaOficial() {
 async function corregirGrilla() {
   if (corrigiendo || !S.listo) return; // Gerencia solo abre para cuentas de gerencia
   if (S.configListo && (S.config.grillaVersion || 0) < GRILLA_VERSION && !actualizandoGrilla) return actualizarGrillaOficial();
+  if (!vinculando) vincularCenso();
   const largas = S.clases.filter(c => c.desde && c.hasta && min(c.hasta) - min(c.desde) > DURACION_CLASE);
   const vistas = new Map(), repetidas = [];
   for (const c of [...S.clases].filter(c => !largas.includes(c)).sort((a, b) => (a.profesor ? 0 : 1) - (b.profesor ? 0 : 1) || a.id.localeCompare(b.id))) {
@@ -352,6 +399,30 @@ const msjCenso = nombre => `Hola${nombre ? ' ' + nombre.split(' ')[0] : ''}! Est
 
 Desde esa app vas a fichar con el QR de recepción. ¡Gracias!`;
 
+// Censo ↔ grilla: por cada profe de clases, lo que marcó en el censo y lo que tiene en la grilla
+function htmlVinculoCenso() {
+  const profes = S.personal.filter(p => p.estado !== 'inactivo' && ((p.roles || []).includes('clases') || (p.clasesDeclaradas || []).length || S.clases.some(c => c.profesor === p.email)))
+    .sort((a, b) => nombreCompleto(a).localeCompare(nombreCompleto(b)));
+  const filas = profes.map(p => {
+    const suyas = S.clases.filter(c => c.profesor === p.email);
+    const dec = (p.clasesDeclaradas || []).map(id => S.clases.find(c => c.id === id)).filter(Boolean);
+    const deOtro = dec.filter(c => c.profesor && c.profesor !== p.email);
+    const sinClase = (p.actividades || []).filter(a => !suyas.some(c => c.actividad === a));
+    const k = p.estado === 'pendiente' ? 'pend' : deOtro.length ? 'falta' : suyas.length ? 'tit' : 'libre';
+    const txt = p.estado === 'pendiente' ? 'Ficha por aprobar: al aprobarla se cargan sus clases' : deOtro.length ? `${deOtro.length} clase(s) que marcó las tiene otro profe` : suyas.length ? 'Conectado' : 'No tiene clases en la grilla';
+    return `<tr><td><button class="btn sm ghost" data-ficha="${esc(p.email)}">${esc(nombreCompleto(p))}</button></td>
+      <td class="num mono">${suyas.length}</td>
+      <td><div class="slots">${bloquesAgenda(agenda(p, S.clases).filter(s => s.tipo === 'clase')).slice(0, 6).map(b => `<span class="slot-mini"><span class="mono">${DIAS_CORTOS[b.dia]} ${b.desde}</span> ${esc(b.que)}</span>`).join('')}${suyas.length > 6 ? '<span class="sub">…</span>' : ''}</div>
+        ${deOtro.length ? `<span class="sub" style="color:var(--accent)">Marcó: ${deOtro.map(c => `${esc(c.actividad)} ${DIAS_CORTOS[c.dia]} ${c.desde} (hoy la da ${esc(nom(c.profesor).split(' ')[0])})`).join(' · ')}</span>` : ''}
+        ${sinClase.length && suyas.length ? `<span class="sub">También sabe dar: ${esc(sinClase.join(', '))}</span>` : !suyas.length && (p.actividades || []).length ? `<span class="sub">Actividades: ${esc(p.actividades.join(', '))}</span>` : ''}</td>
+      <td><span class="est est-${k}">${txt}</span></td></tr>`;
+  });
+  const sinProfe = clasesSinProfe();
+  return `<div class="panel"><div class="cab"><h3>Censo y grilla: quién da cada clase</h3><span class="pill ${sinProfe.length ? 'sin' : 'cubierto'}">${sinProfe.length ? `${sinProfe.length} clases sin profe` : 'Todas las clases tienen profe'}</span></div>
+    <p class="sub">Lo que cada profe marcó en el censo pasa solo a la grilla. Rojo: marcó una clase que hoy tiene otro profe (elegí quién la da en la Grilla).</p>
+    ${filas.length ? `<div class="tabla-wrap"><table><thead><tr><th>Profe</th><th class="num">Clases</th><th>Sus clases en la grilla</th><th>Estado</th></tr></thead><tbody>${filas.join('')}</tbody></table></div>` : '<p class="vacio">Todavía no hay profes de clases en el censo.</p>'}
+    ${sinProfe.length ? `<details><summary style="cursor:pointer;font-weight:600;margin-top:8px">Ver las ${sinProfe.length} clases sin profe</summary><div class="slots" style="margin-top:8px">${sinProfe.sort((a, b) => a.sede.localeCompare(b.sede) || a.dia - b.dia || a.desde.localeCompare(b.desde)).map(c => `<span class="slot-mini" style="border:1px dashed var(--accent)">${esc(c.sede)} · <span class="mono">${DIAS_CORTOS[c.dia]} ${c.desde}</span> ${esc(c.actividad)}</span>`).join('')}</div></details>` : ''}</div>`;
+}
 function vCenso(v) {
   const { filas, sueltos } = estadoCenso();
   const n = k => filas.filter(f => f.estado === k).length;
@@ -370,6 +441,7 @@ function vCenso(v) {
         <div class="kpi ${clasesSinProfe().length ? 'alerta' : ''}"><b>${clasesSinProfe().length}</b><span>clases de la grilla sin profe</span></div>
       </div>
     </div>
+    ${htmlVinculoCenso()}
     <div class="grid-2">
       <div class="panel"><h3>Cómo se hace</h3><div class="lista">
         <div class="item"><div><b>1. Cargá la lista de todo el personal</b><span class="sub">Nombre y celular. Podés pegar la lista entera de una vez.</span></div></div>
