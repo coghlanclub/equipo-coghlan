@@ -1,4 +1,6 @@
 /* Coghlan Club · Personal — layout: barra superior fija + contenido en una columna (máx. 1180px), tablas con scroll propio */
+.opciones-cambio { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.opciones-cambio .panel { display: grid; gap: 8px; align-content: start; }
 :root {
   --bg: #1b1a1e;
   --surface: #25242a;
@@ -473,3 +475,7 @@ button.dt { cursor: pointer; }
 .rev-c { border: 1px dashed var(--accent); background: var(--accent-soft); color: var(--fg); cursor: pointer; font: inherit; font-size: .78rem; }
 .rev-mas { display: inline-flex; align-items: center; gap: 6px; }
 .rev-x { border: 0; background: var(--surface-2); color: var(--accent); border-radius: 50%; width: 20px; height: 20px; cursor: pointer; font-weight: 700; line-height: 1; }
+
+.celda.sin-profe { border: 2px dashed var(--accent); background: var(--accent-soft); }
+.celda.sin-profe select { color: var(--accent); font-weight: 700; }
+.celda select { font-weight: 600; }

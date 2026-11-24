@@ -23,7 +23,7 @@ const S = {
   user: null, recepcion: [], tab: (location.hash.slice(1) || 'hoy'), personal: [], clases: [], ausencias: [], reemplazos: [], fichajes: [], fichajesHoy: [],
   config: {}, admins: [], censo: [], mesAsis: mesDe(new Date()), mesCal: mesDe(new Date()), mesGrilla: mesDe(new Date()), sede: 'Anexo', vistaGrilla: 'semana',
   filtroRol: '', buscar: '', soloSinCubrir: true, personaAsis: '', listo: false, histAnio: '', histPersona: '',
-  externos: [], extListo: false, remVista: 'cubrir', histMes: mesDe(new Date()), histTipo: 'todos', semanaClases: undefined, remModo: 'profe', mesRem: mesDe(new Date()), abiertos: new Set(),
+  externos: [], extListo: false, remVista: 'cubrir', histMes: mesDe(new Date()), histTipo: 'todos', semanaClases: null, remModo: 'profe', mesRem: mesDe(new Date()), abiertos: new Set(),
 };
 if (!TABS.some(t => t[0] === S.tab)) S.tab = 'hoy';
 let subs = [];
@@ -131,7 +131,46 @@ function resolver(n) {
 // ---------- Corrección automática de la grilla ----------
 // Las clases duran 1 hora: si quedó cargada una clase de varias horas (de antes, o a mano) se parte sola
 // en clases de 1 hora, y si una persona tiene la misma clase repetida a la misma hora se deja una sola.
-let corrigiendo = false, limpiandoCenso = false, guardandoExt = false, actualizandoGrilla = false, vinculando = false;
+let corrigiendo = false, limpiandoCenso = false, guardandoExt = false, actualizandoGrilla = false, vinculando = false, uniendo = false;
+const OFICIALES = new Set(GRILLA_BASE.map(c => c.id));
+// ¿Es la misma actividad aunque esté escrita distinto? ("Indoor cycle" = "Indoor Cycle", "Entrenamiento Funcional" ≈ "Funcional")
+const normAct = a => sinTildes(a).replace(/[^a-z0-9ñ ]/g, ' ').replace(/\s+/g, ' ').trim();
+const parecido = (a, b) => { const x = normAct(a), y = normAct(b); return x === y ? 2 : x && y && (x.includes(y) || y.includes(x)) ? 1 : 0; };
+// Un profe cargó su clase en el censo y quedó repetida al lado de la oficial del mismo día y hora:
+// se pasa su nombre a la oficial y se borra la repetida (sus reemplazos y lo que marcó en el censo pasan a la oficial).
+function unionesPendientes() {
+  const oficiales = S.clases.filter(c => OFICIALES.has(c.id));
+  const usadas = new Set(), out = [];
+  for (const c of S.clases.filter(c => !OFICIALES.has(c.id) && c.profesor)) {
+    const mismoHorario = oficiales.filter(o => o.dia === c.dia && o.desde === c.desde && parecido(o.actividad, c.actividad) && !usadas.has(o.id));
+    const mejor = xs => xs.sort((a, b) => parecido(b.actividad, c.actividad) - parecido(a.actividad, c.actividad))[0];
+    // Primero en la misma sede; si no hay, la misma actividad en otra sede (por si eligió mal la sede)
+    const o = mejor(mismoHorario.filter(o => o.sede === c.sede)) || mejor(mismoHorario.filter(o => parecido(o.actividad, c.actividad) === 2));
+    if (!o || (o.profesor && o.profesor !== c.profesor)) continue;
+    usadas.add(o.id); out.push({ c, o });
+  }
+  return out;
+}
+async function unirClasesDeProfes() {
+  const us = unionesPendientes();
+  if (!us.length) return;
+  uniendo = true;
+  const ops = [], h = hoy(), cambio = {};
+  for (const { c, o } of us) {
+    cambio[c.id] = o.id;
+    if (!o.profesor) ops.push({ c: 'clases', id: o.id, data: { profesor: c.profesor, profesorNombre: c.profesorNombre || nom(c.profesor) }, merge: true });
+    ops.push({ c: 'clases', id: c.id, borrar: true });
+    for (const r of S.reemplazos.filter(r => r.claseId === c.id || (r.fecha >= h && r.titular === c.profesor && r.actividad === c.actividad && (r.turnoDesde || r.desde) === c.desde && deIso(r.fecha).getDay() === c.dia)))
+      ops.push({ c: 'reemplazos', id: r.id, data: { claseId: o.id, actividad: o.actividad, sede: o.sede }, merge: true });
+  }
+  for (const p of S.personal) {
+    const dec = p.clasesDeclaradas || [];
+    if (dec.some(id => cambio[id])) ops.push({ c: 'personal', id: p.email, data: { clasesDeclaradas: [...new Set(dec.map(id => cambio[id] || id))] }, merge: true });
+  }
+  try { await lote(ops); toast(`Ordené la grilla: ${us.length} clase(s) que cargaron los profes quedaron en la clase oficial, con su nombre.`); }
+  catch (e) { console.error(e); }
+  uniendo = false;
+}
 // Las actividades que cambiaron de nombre en la agenda oficial
 const ACT_RENOMBRADAS = { 'Power Funcional': 'Fuerza y Calistenia' };
 // Código viejo → código nuevo de las clases renombradas (para lo que los profes marcaron antes)
@@ -217,6 +256,7 @@ async function corregirGrilla() {
   if (corrigiendo || !S.listo) return; // Gerencia solo abre para cuentas de gerencia
   if (S.configListo && (S.config.grillaVersion || 0) < GRILLA_VERSION && !actualizandoGrilla) return actualizarGrillaOficial();
   if (!vinculando) vincularCenso();
+  if (!uniendo) unirClasesDeProfes();
   const largas = S.clases.filter(c => c.desde && c.hasta && min(c.hasta) - min(c.desde) > DURACION_CLASE);
   const vistas = new Map(), repetidas = [];
   for (const c of [...S.clases].filter(c => !largas.includes(c)).sort((a, b) => (a.profesor ? 0 : 1) - (b.profesor ? 0 : 1) || a.id.localeCompare(b.id))) {
@@ -734,7 +774,6 @@ function opcionesProfe(c) {
 }
 
 // Revisión de la grilla contra la agenda oficial publicada: qué clases no tienen profe y cuáles sobran
-const OFICIALES = new Set(GRILLA_BASE.map(c => c.id));
 const ORDEN_SEDE = s => ['Sede', 'Anexo', 'Aranceladas'].indexOf(s) + 1 || 9;
 const ordenClase = (a, b) => ORDEN_SEDE(a.sede) - ORDEN_SEDE(b.sede) || a.dia - b.dia || a.desde.localeCompare(b.desde);
 function htmlRevisionGrilla() {
@@ -744,16 +783,17 @@ function htmlRevisionGrilla() {
   const porSede = xs => ['Sede', 'Anexo', 'Aranceladas', ...new Set(xs.map(c => c.sede))].filter((s, i, a) => a.indexOf(s) === i && xs.some(c => c.sede === s))
     .map(s => `<div class="rev-sede"><b>${esc(s)}</b><div class="slots">${xs.filter(c => c.sede === s).map(c => `<button class="slot-mini rev-c" data-rev-clase="${c.id}"><span class="mono">${DIAS_CORTOS[c.dia]} ${c.desde}</span> ${esc(c.actividad)}</button>`).join('')}</div></div>`).join('');
   const ok = !faltan.length && !deMas.length && !sinProfe.length;
-  return `<details class="panel rev-grilla" ${ok ? '' : 'open'}><summary><b>Revisión de la grilla</b>
-      <span class="pill ${faltan.length || deMas.length ? 'pendiente' : 'cubierto'}">${faltan.length || deMas.length ? 'Distinta a la agenda oficial' : '✓ Igual a la agenda oficial'}</span>
-      <span class="pill ${sinProfe.length ? 'sin' : 'cubierto'}">${sinProfe.length ? `${sinProfe.length} clases sin profe` : '✓ Todas con profe'}</span></summary>
+  return `<details class="panel rev-grilla"><summary><b>Revisión</b>
+      <span class="pill ${faltan.length ? 'pendiente' : 'cubierto'}">${faltan.length ? `Faltan ${faltan.length} clases de la agenda` : '✓ Igual a la agenda oficial'}</span>
+      <span class="pill ${sinProfe.length ? 'sin' : 'cubierto'}">${sinProfe.length ? `${sinProfe.length} clases sin profe (en rojo en la grilla)` : '✓ Todas con profe'}</span>
+      ${deMas.length ? `<span class="pill neutro">${deMas.length} clases fuera de la agenda</span>` : ''}<span class="sub">Tocá para ver el detalle</span></summary>
     ${sinProfe.length ? `<div class="rev-bloque"><h4 style="color:var(--accent)">Clases sin profe asignado (${sinProfe.length})</h4><p class="sub">Tocá una para elegir quién la da.</p>${porSede(sinProfe)}</div>` : ''}
     ${faltan.length ? `<div class="rev-bloque"><h4>Faltan ${faltan.length} clases de la agenda oficial</h4><p class="sub">${esc([...new Set(faltan.map(c => `${c.sede} ${c.actividad}`))].join(' · '))}</p><button class="btn sm" id="rev-sumar">Sumar las que faltan</button></div>` : ''}
     ${deMas.length ? `<div class="rev-bloque"><h4>${deMas.length} clases que no están en la agenda oficial</h4>
-      <p class="sub">Pueden ser clases viejas o que cargó un profe. Si no se dan, borralas. Las que tienen profe aparecen con su nombre.</p>
-      <div class="slots">${deMas.map(c => `<span class="slot-mini rev-mas"><span class="mono">${esc(c.sede)} · ${DIAS_CORTOS[c.dia]} ${c.desde}</span> ${esc(c.actividad)}${c.profesor ? ` · ${esc(nom(c.profesor).split(' ')[0])}` : ''}${c.origen === 'profe' ? ' <i class="sub">(la cargó el profe)</i>' : ''}<button class="rev-x" data-rev-borrar="${c.id}" aria-label="Borrar">×</button></span>`).join('')}</div>
-      <button class="btn sm ghost" id="rev-borrar-todas" style="margin-top:8px">Borrar las ${deMas.length} que no están en la agenda</button></div>` : ''}
-    ${ok ? '<p class="sub">Todo en orden: la grilla es igual a la agenda publicada y todas las clases tienen profe.</p>' : ''}</details>`;
+      <p class="sub">Clases que se dan pero no están en la agenda publicada (por ejemplo Pilates). Si alguna ya no se da, tocá la × para borrarla.</p>
+      <div class="slots">${deMas.map(c => `<span class="slot-mini rev-mas"><span class="mono">${esc(c.sede)} · ${DIAS_CORTOS[c.dia]} ${c.desde}</span> ${esc(c.actividad)}${c.profesor ? ` · ${esc(nom(c.profesor).split(' ')[0])}` : ''}<button class="rev-x" data-rev-borrar="${c.id}" aria-label="Borrar">×</button></span>`).join('')}</div>
+</div>` : ''}
+    ${!sinProfe.length && !faltan.length ? '<p class="sub">Todo en orden: la grilla es igual a la agenda publicada y todas las clases tienen profe.</p>' : ''}</details>`;
 }
 function enlazarRevisionGrilla(v) {
   $$('[data-rev-clase]', v).forEach(b => b.onclick = () => editarClase(S.clases.find(c => c.id === b.dataset.revClase)));
@@ -880,7 +920,6 @@ function grillaSala(v) {
 
 function grillaSemana(v) {
   if (S.sede === SALA) return grillaSala(v);
-  if (S.semanaClases === undefined) S.semanaClases = iso(lunesDe(new Date())); // de entrada, la semana actual con fechas
   if (S.semanaClases) return grillaSemanaFechas(v);
   const cs = S.clases.filter(c => c.sede === S.sede);
   const horas = [...new Set(cs.map(c => c.desde))].sort();
@@ -898,10 +937,7 @@ function grillaSemana(v) {
         ${c.profesor && P(c.profesor) && c.origen !== 'profe' && !(P(c.profesor).actividades || []).includes(c.actividad) ? '<span class="nota">No figura que dé esta actividad</span>' : ''}
       </div>`).join('')}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="7"><p class="vacio">No hay clases en ${esc(S.sede)}.</p></td></tr>`}
     </tbody></table></div>`;
-  $$('[data-asignar]', v).forEach(s => s.onchange = async () => {
-    try { await actualizar('clases', s.dataset.asignar, { profesor: s.value, profesorNombre: s.value ? nom(s.value) : '' }); toast(s.value ? `Asignada a ${nom(s.value)}` : 'Clase sin profesor'); }
-    catch { toast('No se pudo guardar', true); }
-  });
+  $$('[data-asignar]', v).forEach(s => s.onchange = () => cambioDeProfe(S.clases.find(c => c.id === s.dataset.asignar), s.value, s));
   $$('[data-editar-clase]', v).forEach(b => b.onclick = () => editarClase(S.clases.find(c => c.id === b.dataset.editarClase)));
   enlazarSemanaClases(v);
 }
@@ -960,6 +996,43 @@ function verClaseDia(c, f) {
     m.cerrar(); toast(`Anotado: ${p.nombre} no viene el ${fechaCorta(f).slice(0, 5)}. Ahora elegí quién cubre.`);
     setTimeout(() => { const n = necesidadesFuturas(f, f).find(x => x.titular === p.email && x.desde === c.desde); if (n) resolver(n); }, 400);
   });
+}
+
+// Cambiar el profe de una clase: si ya tiene titular, preguntar si es un cambio fijo o un reemplazo de un día
+// (el reemplazo vale solo esa fecha; después vuelve el titular)
+const proximaFecha = dia => iso(sumarDias(new Date(), (dia - new Date().getDay() + 7) % 7));
+async function guardarProfe(c, email) {
+  try { await actualizar('clases', c.id, { profesor: email, profesorNombre: email ? nom(email) : '' }); toast(email ? `${nom(email)} es ahora el profe fijo de ${c.actividad}` : 'Clase sin profesor'); }
+  catch { toast('No se pudo guardar', true); }
+}
+function cambioDeProfe(c, nuevo, sel) {
+  if (!c) return;
+  if (!c.profesor || !nuevo || !activo(P(c.profesor))) return guardarProfe(c, nuevo);
+  let hecho = false;
+  const m = modal(`${cabModal('¿Cambio fijo o reemplazo?')}
+    <p><b>${esc(c.actividad)}</b> · ${esc(c.sede)} · ${DIAS[c.dia]} ${c.desde}<br>Titular: <b>${esc(nom(c.profesor))}</b> · Elegiste: <b>${esc(nom(nuevo))}</b></p>
+    <div class="opciones-cambio">
+      <div class="panel"><b>Reemplazo de un día</b><span class="sub">${esc(nom(nuevo).split(' ')[0])} la da solo esa fecha. Después vuelve ${esc(nom(c.profesor).split(' ')[0])}.</span>
+        <label>¿Qué ${DIAS[c.dia].toLowerCase()}?<input type="date" id="cp-f" value="${proximaFecha(c.dia)}"></label>
+        <button class="btn ok" id="cp-rem">Es un reemplazo</button></div>
+      <div class="panel"><b>Cambio fijo</b><span class="sub">${esc(nom(nuevo).split(' ')[0])} pasa a ser el titular de esta clase todas las semanas.</span>
+        <button class="btn ghost" id="cp-fijo">Cambiar el titular</button></div></div>`, { alCerrar: () => { if (!hecho) sel.value = c.profesor; } });
+  $('#cp-fijo', m.el).onclick = async () => { hecho = true; m.cerrar(); await guardarProfe(c, nuevo); };
+  $('#cp-rem', m.el).onclick = async () => {
+    const f = $('#cp-f', m.el).value;
+    if (!f || deIso(f).getDay() !== c.dia) return toast(`Elegí un ${DIAS[c.dia].toLowerCase()}: esa clase es los ${DIAS[c.dia].toLowerCase()}`, true);
+    if (f < hoy()) return toast('Elegí una fecha de hoy en adelante', true);
+    try {
+      // El titular falta solo en ese horario de ese día (si ya tenía la falta cargada, se usa esa)
+      let a = S.ausencias.find(x => x.email === c.profesor && x.estado !== 'rechazada' && x.desde <= f && x.hasta >= f && tocaHoras(x, c.desde, c.hasta));
+      const aid = a ? a.id : await agregar('ausencias', { email: c.profesor, nombre: nom(c.profesor), tipo: 'ausencia', desde: f, hasta: f, horas: [[c.desde, c.hasta]], motivo: 'Reemplazo', estado: 'aprobada', creado: AHORA, respondida: AHORA, respondidaPor: S.user.email, cargadaPorGerencia: true });
+      const n = { fecha: f, dia: c.dia, desde: c.desde, hasta: c.hasta, rol: 'clases', actividad: c.actividad, sede: c.sede, claseId: c.id, titular: c.profesor, ausenciaId: aid };
+      if (!faltaCubrir(n, S.reemplazos).length) { hecho = false; m.cerrar(); return toast('Ese día ya está cubierto', true); }
+      await agregar('reemplazos', docReemplazo(n, { reemplazo: nuevo, reemplazoNombre: nom(nuevo) }));
+      hecho = false; m.cerrar(); // la lista vuelve a mostrar al titular
+      toast(`${nom(nuevo).split(' ')[0]} reemplaza a ${nom(c.profesor).split(' ')[0]} el ${fechaCorta(f).slice(0, 5)}. Después vuelve ${nom(c.profesor).split(' ')[0]}.`);
+    } catch (e) { console.error(e); toast('No se pudo guardar', true); }
+  };
 }
 
 function editarClase(c) {
