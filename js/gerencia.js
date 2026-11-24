@@ -733,6 +733,52 @@ function opcionesProfe(c) {
   return `<option value="">— Sin profesor —</option>${huerf}${saben.length ? `<optgroup label="Dan ${esc(c.actividad)}">${saben.map(op).join('')}</optgroup>` : ''}${otros.length ? `<optgroup label="Otros profes de clases">${otros.map(op).join('')}</optgroup>` : ''}`;
 }
 
+// Revisión de la grilla contra la agenda oficial publicada: qué clases no tienen profe y cuáles sobran
+const OFICIALES = new Set(GRILLA_BASE.map(c => c.id));
+const ORDEN_SEDE = s => ['Sede', 'Anexo', 'Aranceladas'].indexOf(s) + 1 || 9;
+const ordenClase = (a, b) => ORDEN_SEDE(a.sede) - ORDEN_SEDE(b.sede) || a.dia - b.dia || a.desde.localeCompare(b.desde);
+function htmlRevisionGrilla() {
+  const faltan = GRILLA_BASE.filter(c => !S.clases.some(x => x.id === c.id));
+  const deMas = S.clases.filter(c => !OFICIALES.has(c.id)).sort(ordenClase);
+  const sinProfe = clasesSinProfe().sort(ordenClase);
+  const porSede = xs => ['Sede', 'Anexo', 'Aranceladas', ...new Set(xs.map(c => c.sede))].filter((s, i, a) => a.indexOf(s) === i && xs.some(c => c.sede === s))
+    .map(s => `<div class="rev-sede"><b>${esc(s)}</b><div class="slots">${xs.filter(c => c.sede === s).map(c => `<button class="slot-mini rev-c" data-rev-clase="${c.id}"><span class="mono">${DIAS_CORTOS[c.dia]} ${c.desde}</span> ${esc(c.actividad)}</button>`).join('')}</div></div>`).join('');
+  const ok = !faltan.length && !deMas.length && !sinProfe.length;
+  return `<details class="panel rev-grilla" ${ok ? '' : 'open'}><summary><b>Revisión de la grilla</b>
+      <span class="pill ${faltan.length || deMas.length ? 'pendiente' : 'cubierto'}">${faltan.length || deMas.length ? 'Distinta a la agenda oficial' : '✓ Igual a la agenda oficial'}</span>
+      <span class="pill ${sinProfe.length ? 'sin' : 'cubierto'}">${sinProfe.length ? `${sinProfe.length} clases sin profe` : '✓ Todas con profe'}</span></summary>
+    ${sinProfe.length ? `<div class="rev-bloque"><h4 style="color:var(--accent)">Clases sin profe asignado (${sinProfe.length})</h4><p class="sub">Tocá una para elegir quién la da.</p>${porSede(sinProfe)}</div>` : ''}
+    ${faltan.length ? `<div class="rev-bloque"><h4>Faltan ${faltan.length} clases de la agenda oficial</h4><p class="sub">${esc([...new Set(faltan.map(c => `${c.sede} ${c.actividad}`))].join(' · '))}</p><button class="btn sm" id="rev-sumar">Sumar las que faltan</button></div>` : ''}
+    ${deMas.length ? `<div class="rev-bloque"><h4>${deMas.length} clases que no están en la agenda oficial</h4>
+      <p class="sub">Pueden ser clases viejas o que cargó un profe. Si no se dan, borralas. Las que tienen profe aparecen con su nombre.</p>
+      <div class="slots">${deMas.map(c => `<span class="slot-mini rev-mas"><span class="mono">${esc(c.sede)} · ${DIAS_CORTOS[c.dia]} ${c.desde}</span> ${esc(c.actividad)}${c.profesor ? ` · ${esc(nom(c.profesor).split(' ')[0])}` : ''}${c.origen === 'profe' ? ' <i class="sub">(la cargó el profe)</i>' : ''}<button class="rev-x" data-rev-borrar="${c.id}" aria-label="Borrar">×</button></span>`).join('')}</div>
+      <button class="btn sm ghost" id="rev-borrar-todas" style="margin-top:8px">Borrar las ${deMas.length} que no están en la agenda</button></div>` : ''}
+    ${ok ? '<p class="sub">Todo en orden: la grilla es igual a la agenda publicada y todas las clases tienen profe.</p>' : ''}</details>`;
+}
+function enlazarRevisionGrilla(v) {
+  $$('[data-rev-clase]', v).forEach(b => b.onclick = () => editarClase(S.clases.find(c => c.id === b.dataset.revClase)));
+  $('#rev-sumar', v)?.addEventListener('click', async () => {
+    const faltan = GRILLA_BASE.filter(c => !S.clases.some(x => x.id === c.id));
+    await lote(faltan.map(c => ({ c: 'clases', id: c.id, data: c }))); toast(`${faltan.length} clases sumadas`);
+  });
+  const borrarClases = async cs => {
+    const ops = cs.map(c => ({ c: 'clases', id: c.id, borrar: true }));
+    // Las fichas que las tenían marcadas dejan de tenerlas
+    for (const p of S.personal) { const dec = p.clasesDeclaradas || []; if (dec.some(id => cs.some(c => c.id === id))) ops.push({ c: 'personal', id: p.email, data: { clasesDeclaradas: dec.filter(id => !cs.some(c => c.id === id)) }, merge: true }); }
+    await lote(ops);
+  };
+  $$('[data-rev-borrar]', v).forEach(b => b.onclick = async () => {
+    const c = S.clases.find(x => x.id === b.dataset.revBorrar); if (!c) return;
+    if (!(await confirmar(`¿Borrar <b>${esc(c.actividad)}</b> de ${esc(c.sede)}, ${DIAS[c.dia]} ${c.desde}?${c.profesor ? `<br>La tiene ${esc(nom(c.profesor))}.` : ''}`, { si: 'Borrar', peligro: true }))) return;
+    await borrarClases([c]); toast('Clase borrada');
+  });
+  $('#rev-borrar-todas', v)?.addEventListener('click', async () => {
+    const deMas = S.clases.filter(c => !OFICIALES.has(c.id));
+    if (!(await confirmar(`¿Borrar las <b>${deMas.length}</b> clases que no están en la agenda oficial?${deMas.some(c => c.profesor) ? `<br>${deMas.filter(c => c.profesor).length} tienen profe asignado.` : ''}<br>No se puede deshacer.`, { si: `Borrar ${deMas.length}`, peligro: true }))) return;
+    await borrarClases(deMas); toast(`${deMas.length} clases borradas`);
+  });
+}
+
 function vGrilla(v) {
   const vacia = !S.clases.length;
   v.innerHTML = `<div class="cab"><div><span class="eyebrow">Agenda de clases presenciales</span><h1>Grilla de clases</h1>
@@ -742,6 +788,7 @@ function vGrilla(v) {
         <button class="btn ghost" id="cargar-oficial">${vacia ? 'Cargar grilla oficial' : 'Sumar clases faltantes de la grilla oficial'}</button>
         <button class="btn" id="nueva-clase">+ Clase</button></div></div>
     ${vacia ? '<div class="aviso"><div><b>La grilla está vacía.</b><span>Tocá "Cargar grilla oficial" para traer Sede, Anexo y Clases aranceladas.</span></div></div>' : ''}
+    ${htmlRevisionGrilla()}
     <div id="contenido-grilla"></div>`;
   $$('[data-vista]', v).forEach(b => b.onclick = () => { S.vistaGrilla = b.dataset.vista; render(); });
   $('#nueva-clase').onclick = () => editarClase({ sede: S.sede === SALA ? SEDES[0] : S.sede, dia: 1, desde: '08:00', hasta: '09:00', actividad: '' });
@@ -752,6 +799,7 @@ function vGrilla(v) {
     toast(`${faltan.length} clases cargadas`);
   };
   const c = $('#contenido-grilla');
+  enlazarRevisionGrilla(v);
   S.vistaGrilla === 'semana' ? grillaSemana(c) : grillaMes(c);
 }
 
