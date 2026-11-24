@@ -363,6 +363,9 @@ function vHoy(v) {
       return `<div class="item fila-est falta"><div><b>${n.fecha === h ? 'Hoy' : DIAS_CORTOS[n.dia] + ' ' + fechaCorta(n.fecha).slice(0, 5)} falta ${esc(nom(n.titular).split(' ')[0])}</b>
       <span class="sub">${ns.length} ${ns.length === 1 ? 'turno' : 'turnos'} sin cubrir · tocá uno para resolverlo</span></div>
       <div class="acciones">${ns.map(x => `<button class="btn sm" data-resolver="${regResolver(x)}">${x.generico ? 'A confirmar' : `<span class="mono">${faltaCubrir(x, S.reemplazos)[0]?.[0] || x.desde}</span>&nbsp;${esc(x.rol === 'clases' ? x.actividad : ROL_CORTO[x.rol])}`}</button>`).join('')}</div></div>`; }),
+    // Alguien quiere entrar desde otro celular
+    ...pedidosCelular().map(p => `<div class="item fila-est pend"><div><b>${esc(nombreCompleto(p))} quiere usar otro celular</b><span class="sub">Nuevo: ${esc(p.pedidoDispositivo.modelo || 'celular nuevo')} · hoy tiene ${esc(p.dispositivoModelo || 'otro celular')}</span></div>
+      <div class="acciones"><button class="btn sm ok" data-hab-hoy="${esc(p.email)}">Habilitar</button></div></div>`),
     ...pendientesAus().slice(0, 4).map(a => `<div class="item fila-est pend"><div><b>${esc((a.nombre || nom(a.email)).split(' ')[0])} pide ${a.tipo === 'vacaciones' ? 'vacaciones' : 'ausencia'}</b><span class="sub"><span class="mono">${rangoTexto(a.desde, a.hasta)}</span> · ${textoDias(a.desde, a.hasta, P(a.email), S.clases)}</span></div>
       <div class="acciones"><button class="btn sm ok" data-apr-hoy="${a.id}">Aprobar</button><button class="btn sm ghost" data-ver-hoy="${a.id}">Ver</button></div></div>`),
   ];
@@ -387,6 +390,7 @@ function vHoy(v) {
     </div>`;
   $$('[data-ir]', v).forEach(b => b.onclick = () => irA(b.dataset.ir));
   $$('[data-apr-hoy]', v).forEach(b => b.onclick = () => responder(S.ausencias.find(a => a.id === b.dataset.aprHoy), true));
+  $$('[data-hab-hoy]', v).forEach(b => b.onclick = () => habilitarCelular(P(b.dataset.habHoy)));
   $$('[data-ver-hoy]', v).forEach(b => b.onclick = () => verAusencia(S.ausencias.find(a => a.id === b.dataset.verHoy)));
   $$('[data-ext]', v).forEach(b => b.onclick = () => verExterno(EXT(b.dataset.ext)));
   enlazarFichas(v);

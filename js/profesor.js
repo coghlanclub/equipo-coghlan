@@ -86,13 +86,19 @@ function renderAbrirDesdeIcono(p) {
   enlazarBarra();
 }
 
+let pidiendo = false;
 function renderBloqueado(p, miId) {
   const pedido = p.pedidoDispositivo?.id === miId;
+  // El pedido a gerencia se manda solo: no hace falta tocar nada
+  if (!pedido && !pidiendo) {
+    pidiendo = true;
+    actualizar('personal', p.email, { pedidoDispositivo: { id: miId, modelo: modeloDispositivo(navigator.userAgent), fecha: Date.now() } })
+      .catch(e => console.error(e)).finally(() => { pidiendo = false; });
+  }
   app.innerHTML = barra() + `<main><div class="panel" style="max-width:560px">
     <span class="eyebrow">Celular no habilitado</span><h1>Tu cuenta ya está en otro celular</h1>
     <p class="sub">Por seguridad cada persona usa la app en un solo celular (${esc(p.dispositivoModelo || 'otro dispositivo')}${p.dispositivoDesde ? ', desde el ' + fechaCorta(new Date(p.dispositivoDesde).toISOString().slice(0, 10)) : ''}). Si cambiaste de celular, pedile a gerencia que habilite este.</p>
-    ${pedido ? '<div class="aviso info"><div><b>Pedido enviado</b><span>Cuando gerencia lo habilite, esta pantalla se actualiza sola.</span></div></div>'
-      : '<button class="btn grande" id="pedir-disp">Pedir a gerencia que habilite este celular</button>'}
+    <div class="aviso info"><div><b>Ya le avisamos a gerencia</b><span>Cuando habiliten este celular, esta pantalla se actualiza sola. Si es urgente, avisales por WhatsApp.</span></div></div>
   </div></main>`;
   enlazarBarra();
   $('#pedir-disp')?.addEventListener('click', async () => {
