@@ -396,8 +396,22 @@ export function waNumero(tel) {
 }
 export function waLink(tel, texto) { return `https://wa.me/${waNumero(tel)}?text=${encodeURIComponent(texto)}`; }
 export function queCubre(n) { return n.rol === 'clases' && n.actividad ? `${n.actividad}${n.sede ? ' (' + n.sede + ')' : ''}` : ROLES[n.rol]; }
+// Mensajes de WhatsApp para buscar reemplazo (las *palabras* salen en negrita en WhatsApp)
+const queMsj = n => n.rol === 'clases' && n.actividad ? `*${n.actividad}*${n.sede ? ' en el ' + n.sede : ''}` : `*${ROLES[n.rol]}*`;
+const diaMsj = n => fechaLarga(n.fecha).replace(/^./, c => c.toLowerCase());
+const horaMsj = n => n.generico ? 'en tu horario habitual' : `de ${n.desde} a ${n.hasta} hs`;
+// A un profe en particular
 export function textoReemplazo(n, p) {
-  return `Hola ${p.nombre}, ¿podés cubrir ${queCubre(n)} el ${fechaLarga(n.fecha)} de ${n.desde} a ${n.hasta} en Coghlan Club? Avisame. ¡Gracias!`;
+  return `Hola ${(p.nombre || '').split(' ')[0]}, ¿cómo estás?\nTe escribo de la gerencia de Coghlan Club. Necesitamos cubrir ${queMsj(n)} el *${diaMsj(n)}, ${horaMsj(n)}*.\n¿La podrías tomar? Avisame y te lo confirmo. ¡Muchas gracias!`;
+}
+// Al grupo del staff
+export function textoGrupo(n) {
+  const que = n.rol === 'clases' && n.actividad ? `🏋️ *${n.actividad}*${n.sede ? ' · ' + n.sede : ''}` : `🏋️ *${ROLES[n.rol]}*`;
+  return `Hola equipo 👋\nNecesitamos cubrir ${n.rol === 'clases' ? 'una clase' : 'un turno'}:\n\n${que}\n📅 *${fechaLarga(n.fecha)}*\n🕕 *${n.generico ? 'Horario a confirmar' : `De ${n.desde} a ${n.hasta} hs`}*\n\n¿Alguien la puede tomar? Respondé por acá o escribime al privado.\n¡Gracias!\n_Gerencia · Coghlan Club_`;
+}
+// Confirmación a quien cubre
+export function textoConfirmacion(n, nombre) {
+  return `¡Gracias, ${(nombre || '').split(' ')[0]}! 🙌\nTe confirmo el reemplazo: ${queMsj(n)}, *${diaMsj(n)} ${horaMsj(n)}*.\nYa quedó cargado en la app.`;
 }
 
 // ---------- Dispositivo, personal sin celular y faltas ----------

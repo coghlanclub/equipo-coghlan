@@ -2,9 +2,9 @@ globalThis.__app = 'profe';
 import { DEMO, AHORA, alCambiarUsuario, salir, obtener, escuchar, escucharDoc, guardar, actualizar, agregar, borrar } from './datos.js';
 import {
   esc, hoy, mesDe, MESES, ESTADOS, rangoTexto, diasEntre, textoDias, fechaLarga, nombreCompleto, mailto, mailSolicitud, jornadas, agenda,
-  horaDe, fmtMin, ms, queCubre, TOLERANCIA_TARDE, hhmm, deIso, sumarDias, iso, modeloDispositivo, fechaCorta,
+  horaDe, fmtMin, ms, queCubre, TOLERANCIA_TARDE, hhmm, deIso, sumarDias, iso, modeloDispositivo, fechaCorta, bloquesAgenda,
 } from './logica.js';
-import { $, toast, modal, cabModal, confirmar, copiar, pantallaLogin, prepararDemo, registrarApp, htmlFicha, htmlAgenda, idDispositivo } from './ui.js';
+import { $, $$, toast, modal, cabModal, confirmar, copiar, pantallaLogin, prepararDemo, registrarApp, htmlFicha, htmlAgenda, idDispositivo } from './ui.js';
 import { ayudaInstalar, iosEnNavegador } from './instalar.js';
 import { censoProfe } from './censo-form.js';
 import { htmlConsentimiento } from './consentimiento.js';
@@ -263,6 +263,7 @@ function abrirSolicitud(tipo) {
         <label>Hasta (inclusive)<input id="s-hasta" type="date" value="${ini}" min="${tipo === 'vacaciones' ? manana : hoy()}"></label>
       </div>
       ${tipo === 'ausencia' ? '<label>Motivo<input id="s-motivo" placeholder="Ej.: turno médico, trámite, viaje"></label>' : ''}
+      <div id="s-turnos"></div>
       <div id="s-impacto"></div>
       <div class="aviso info"><div><b>Se envía solo a</b>
         <span>Gerencia: <b>${esc(dest.correo)}</b>${dest.waRecepcion ? ' · Recepción por WhatsApp' : ''}</span></div></div>
@@ -274,18 +275,36 @@ function abrirSolicitud(tipo) {
     </div>
     <div class="modal-pie"><button class="btn ghost" data-cerrar>Cancelar</button><button class="btn ghost" id="s-copiar">Copiar texto</button><button class="btn" id="s-enviar">Enviar pedido</button></div>`, { ancho: true });
   const v = id => $(id, m.el)?.value.trim() || '';
+  // Si falta un solo día y ese día tiene varios turnos: elige a cuál falta (por defecto, a todos)
+  let elegidos = null, diaElegido = '';
+  const turnosDelDia = d => d ? bloquesAgenda(agenda(p, S.clases).filter(s => s.dia === deIso(d).getDay())) : [];
+  const horasElegidas = () => { const d = v('#s-desde'), bs = turnosDelDia(d); return elegidos && elegidos.size && elegidos.size < bs.length ? bs.filter(b => elegidos.has(b.desde)).map(b => [b.desde, b.hasta]) : null; };
+  const pintarTurnos = () => {
+    const box = $('#s-turnos', m.el); if (!box) return;
+    const d = v('#s-desde'), h = v('#s-hasta'), bs = tipo === 'ausencia' && d && d === h ? turnosDelDia(d) : [];
+    if (bs.length < 2) { box.innerHTML = ''; elegidos = null; return; }
+    if (!elegidos || diaElegido !== d) { elegidos = new Set(); diaElegido = d; }
+    box.innerHTML = `<div style="display:grid;gap:8px"><b>Ese día tenés ${bs.length} turnos. Marcá el que no vas a poder dar.</b>
+      <div style="display:grid;gap:6px">${bs.map(b => `<button type="button" class="turno-falta" data-tf="${b.desde}" aria-pressed="${elegidos.has(b.desde)}"><span class="tf-x">${elegidos.has(b.desde) ? '✕' : ''}</span><span><b class="mono">${b.desde} – ${b.hasta}</b> · ${esc(b.que)}${b.sede ? ' (' + esc(b.sede) + ')' : ''}</span></button>`).join('')}</div>
+      <span class="sub" style="color:${elegidos.size ? 'var(--accent)' : 'var(--muted)'}">${!elegidos.size ? 'Si no marcás ninguno, faltás todo el día.' : elegidos.size === bs.length ? 'Faltás todo el día: todos tus turnos quedan para cubrir.' : 'Solo lo marcado queda para cubrir; el resto lo das como siempre.'}</span></div>`;
+    $$('[data-tf]', box).forEach(b => b.onclick = () => { const x = b.dataset.tf; elegidos.has(x) ? elegidos.delete(x) : elegidos.add(x); regenerar(); });
+  };
   const regenerar = () => {
+    pintarTurnos();
     let d = v('#s-desde'), h = v('#s-hasta');
     if (d && (!h || h < d)) { $('#s-hasta', m.el).value = d; h = d; }
     $('#s-hasta', m.el).min = d || '';
     if (!editado) {
       const t = mailSolicitud({ tipo, desde: d, hasta: h, motivo: v('#s-motivo'), persona: p, clases: S.clases });
-      $('#s-asunto', m.el).value = t.asunto; $('#s-cuerpo', m.el).value = t.cuerpo;
+      const hs = horasElegidas();
+      $('#s-asunto', m.el).value = t.asunto; $('#s-cuerpo', m.el).value = hs ? t.cuerpo.replace(/\n\n(Motivo:|Quedo)/, `\n\nFalto solo a: ${hs.map(x => x.join(' a ')).join(' y ')} hs. El resto de mis turnos de ese día los doy normalmente.\n\n$1`) : t.cuerpo;
     }
     const n = d && h ? diasEntre(d, h) : 0;
     const ag = agenda(p, S.clases);
     let turnos = 0;
     if (n && n < 120) for (let x = deIso(d); x <= deIso(h); x.setDate(x.getDate() + 1)) turnos += ag.filter(s => s.dia === x.getDay()).length;
+    const hsSel = horasElegidas();
+    if (hsSel) turnos = ag.filter(s => s.dia === deIso(d).getDay() && hsSel.some(([a, b]) => s.desde >= a && s.desde < b)).length;
     $('#s-impacto', m.el).innerHTML = n ? `<p class="sub"><b>${textoDias(d, h, p, S.clases)}</b> · ${turnos ? `quedan <b>${turnos}</b> turnos/clases para cubrir; gerencia se encarga del reemplazo.` : 'no tenés turnos esos días.'}</p>` : '';
   };
   ['#s-desde', '#s-hasta', '#s-motivo'].forEach(id => $(id, m.el)?.addEventListener('input', regenerar));
@@ -301,7 +320,8 @@ function abrirSolicitud(tipo) {
     const pisa = S.ausencias.find(a => a.estado !== 'rechazada' && a.desde <= hasta && a.hasta >= desde);
     if (pisa) return toast(`Ya tenés un pedido para esas fechas (${rangoTexto(pisa.desde, pisa.hasta)})`, true);
     try {
-      await agregar('ausencias', { email: p.email, nombre: nombreCompleto(p), tipo, desde, hasta, motivo: v('#s-motivo'), estado: 'pendiente', creado: AHORA });
+      const horas = desde === hasta ? horasElegidas() : null;
+      await agregar('ausencias', { email: p.email, nombre: nombreCompleto(p), tipo, desde, hasta, ...(horas ? { horas } : {}), motivo: v('#s-motivo'), estado: 'pendiente', creado: AHORA });
     } catch (e) { console.error(e); return toast('No se pudo registrar el pedido', true); }
     const asunto = v('#s-asunto'), cuerpo = $('#s-cuerpo', m.el).value;
     m.cerrar();

@@ -4,7 +4,7 @@ import {
   esc, ROLES, ROL_CORTO, ROLES_TURNO, DIAS, DIAS_CORTOS, DIAS_LABORABLES, MESES, ESTADOS, SEDES, GRILLA_BASE, ACTIVIDADES_BASE,
   hoy, iso, deIso, mesDe, sumarDias, rangoTexto, diasDeTrabajo, textoDias, fechaLarga, fechaCorta, min, seSolapan, nombreCompleto, iniciales,
   activo, agenda, bloquesAgenda, resumenSemana, necesidades, tipoReemplazo, cubierto, reemplazosDe, faltaCubrir, candidatos, huecos, conflictos, ausenteEn, jornadas, resumenAsistencia,
-  horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
+  horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, textoGrupo, textoConfirmacion, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
   faltasSinAviso, sinCorreo, rangoFechas, normTel, GRILLA_VERSION, GRILLA_RENOMBRES, textoHoras, tocaHoras, HORARIO_CLUB, hhmm, FRANJAS, enClasesDeUnaHora,
 } from './logica.js';
 import { enviarCorreo, envioAutomatico, destinos } from './correo.js';
@@ -127,6 +127,81 @@ function resolver(n) {
     <div id="res-cuerpo">${htmlNecesidad(actual)}</div><div class="modal-pie"><button class="btn ghost" data-cerrar>Listo</button></div>`, { ancho: true });
   enlazarNecesidades(m.el, () => m.cerrar());
 }
+
+// ---------- Pedir reemplazo por WhatsApp: mensaje listo e imagen para compartir ----------
+document.addEventListener('click', e => { const b = e.target.closest('[data-difundir]'); if (b) { e.preventDefault(); abrirDifundir(JSON.parse(b.dataset.difundir)); } });
+const DIAS_LARGOS = ['DOMINGO', 'LUNES', 'MARTES', 'MIÉRCOLES', 'JUEVES', 'VIERNES', 'SÁBADO'];
+function dibujarImagenReemplazo(cv, n, tema) {
+  const x = cv.getContext('2d'), oscuro = tema !== 'roja';
+  const F = (w, s) => `${w} ${s}px Archivo, "Helvetica Neue", Arial, sans-serif`;
+  const caja = (X, Y, W, H, R) => { x.beginPath(); x.roundRect(X, Y, W, H, R); x.fill(); };
+  const ajustar = (t, max, s, w) => { do { x.font = F(w, s); s -= 4; } while (x.measureText(t).width > max && s > 40); };
+  const bg = oscuro ? '#141317' : '#e5414b', sub = oscuro ? '#a5a2ad' : '#ffe1e3', acc = oscuro ? '#e5414b' : '#141317';
+  x.fillStyle = bg; x.fillRect(0, 0, 1080, 1350);
+  x.save(); x.globalAlpha = oscuro ? 0.09 : 0.12; x.fillStyle = oscuro ? '#e5414b' : '#ffffff';
+  for (let i = 0; i < 6; i++) { x.beginPath(); x.moveTo(620 + i * 90, 0); x.lineTo(700 + i * 90, 0); x.lineTo(400 + i * 90, 1350); x.lineTo(320 + i * 90, 1350); x.fill(); }
+  x.restore();
+  x.font = F(700, 46); x.fillStyle = '#fff'; x.fillText('coghlan', 80, 120); const w = x.measureText('coghlan').width;
+  x.fillStyle = acc; x.fillText('club', 80 + w, 120); x.font = F(700, 26); x.fillStyle = sub; x.fillText('40 AÑOS', 80 + w + x.measureText('club').width + 70, 118);
+  x.fillStyle = acc; caja(80, 190, 470, 70, 35); x.fillStyle = '#fff'; x.font = F(900, 32); x.fillText(n.rol === 'clases' ? 'CLASE PARA CUBRIR' : 'TURNO PARA CUBRIR', 114, 236);
+  const act = (n.rol === 'clases' && n.actividad ? n.actividad : ROL_CORTO[n.rol]).toUpperCase();
+  x.fillStyle = '#fff'; ajustar(act, 920, 170, 900); x.fillText(act, 74, 450);
+  x.font = F(500, 50); x.fillStyle = sub; x.fillText(n.sede ? 'Sede ' + n.sede : ROLES[n.rol], 80, 525);
+  const f = deIso(n.fecha);
+  x.fillStyle = oscuro ? '#ffffff' : '#141317'; caja(80, 620, 330, 360, 34);
+  x.fillStyle = oscuro ? '#e5414b' : '#141317'; x.beginPath(); x.roundRect(80, 620, 330, 90, [34, 34, 0, 0]); x.fill();
+  x.fillStyle = '#fff'; x.font = F(900, 40); x.textAlign = 'center'; x.fillText(DIAS_LARGOS[f.getDay()], 245, 680);
+  x.fillStyle = oscuro ? '#141317' : '#ffffff'; x.font = F(900, 190); x.fillText(String(f.getDate()), 245, 900);
+  x.font = F(700, 34); x.fillText(MESES[f.getMonth()].toUpperCase(), 245, 950); x.textAlign = 'left';
+  x.fillStyle = sub; x.font = F(700, 34); x.fillText('HORARIO', 470, 680);
+  if (n.generico) { x.fillStyle = '#fff'; x.font = F(900, 70); x.fillText('A confirmar', 466, 790); }
+  else { x.fillStyle = '#fff'; x.font = F(900, 96); x.fillText(n.desde, 466, 790); x.font = F(500, 48); x.fillStyle = sub; x.fillText('a', 470, 860); x.fillStyle = '#fff'; x.font = F(900, 96); x.fillText(n.hasta, 520, 870); x.font = F(700, 40); x.fillStyle = sub; x.fillText('hs', 800, 870); }
+  x.fillStyle = oscuro ? '#1f1e24' : '#c9343d'; caja(80, 1060, 920, 170, 30);
+  x.fillStyle = oscuro ? '#43b77d' : '#ffffff'; x.font = F(900, 54); x.fillText(n.rol === 'clases' ? '¿La podés tomar?' : '¿Lo podés tomar?', 120, 1135);
+  x.fillStyle = oscuro ? '#ffffff' : '#ffe1e3'; x.font = F(500, 40); x.fillText('Escribile a gerencia y queda confirmada', 120, 1195);
+  x.fillStyle = sub; x.font = F(500, 30); x.fillText('Washington 2558 · Coghlan', 80, 1300);
+}
+function abrirDifundir(n0) {
+  const n = necesidadesFuturas(n0.fecha, n0.fecha).find(x => x.titular === n0.titular && x.desde === n0.desde && (x.actividad || '') === (n0.actividad || '')) || n0;
+  const falta = faltaCubrir(n, S.reemplazos), [fd, fh] = falta[0] || [n.desde, n.hasta];
+  const parte = falta.length === 1 && !n.generico ? { ...n, desde: fd, hasta: fh } : n; // si ya cubrieron una parte, se pide lo que falta
+  const cs = candidatos(parte, S.personal, S.ausencias, S.reemplazos, S.clases).filter(c => c.p.telefono);
+  const exts = externos().filter(x => x.tel && (x.acts || []).includes(queAct(n)) && libreExt(x, n.fecha, fd, fh));
+  let tema = 'oscura';
+  const m = modal(`${cabModal('Pedir reemplazo por WhatsApp')}
+    <p class="sub">${esc(queCubre(n))} · ${fechaLarga(n.fecha)} · <span class="mono">${parte.generico ? 'horario a confirmar' : parte.desde + '–' + parte.hasta}</span> · falta ${esc(nom(n.titular).split(' ')[0])}</p>
+    <div class="difundir">
+      <div class="dif-col"><h4>1. Mensaje para el grupo</h4>
+        <textarea id="dif-msj" rows="11">${esc(textoGrupo(parte))}</textarea>
+        <div class="acciones" style="justify-content:flex-start"><button class="btn ghost sm" id="dif-copiar">Copiar mensaje</button><a class="btn sm" id="dif-wa" target="_blank" rel="noopener">Abrir WhatsApp y elegir el grupo</a></div>
+        <h4>2. O escribile a cada uno</h4>
+        ${cs.length || exts.length ? `<div class="lista">${[...cs.map(({ p, disponible }) => ({ nombre: nombreCompleto(p), tel: p.telefono, info: disponible ? 'Staff · dijo que puede' : 'Staff · libre a esa hora', ext: false })), ...exts.map(x => ({ nombre: x.nombre, tel: x.tel, info: 'Externo', ext: true }))].slice(0, 8)
+          .map(c => `<div class="item"><span><b>${esc(c.nombre)}</b> <span class="sub">${c.info}</span></span><a class="btn sm ${c.ext ? 'ext' : 'ghost'}" target="_blank" rel="noopener" href="${waLink(c.tel, textoReemplazo(parte, { nombre: c.nombre }))}">WhatsApp</a></div>`).join('')}</div>`
+          : '<p class="sub">No hay nadie libre con teléfono cargado. Mandalo al grupo.</p>'}</div>
+      <div class="dif-col"><h4>3. Imagen para compartir</h4>
+        <div class="seg" role="group" aria-label="Diseño"><button data-tema="oscura" aria-pressed="true">Oscura</button><button data-tema="roja" aria-pressed="false">Roja</button></div>
+        <canvas id="dif-img" width="1080" height="1350"></canvas>
+        <div class="acciones" style="justify-content:flex-start"><button class="btn sm" id="dif-compartir">Compartir imagen</button><button class="btn ghost sm" id="dif-bajar">Descargar</button></div>
+        <span class="sub">En el celular, "Compartir" la manda directo a WhatsApp o a tu estado.</span></div>
+    </div>
+    <div class="modal-pie"><button class="btn ghost" data-cerrar>Listo</button></div>`, { ancho: true });
+  const msj = $('#dif-msj', m.el), wa = $('#dif-wa', m.el), cv = $('#dif-img', m.el);
+  const actualizarWa = () => { wa.href = 'https://wa.me/?text=' + encodeURIComponent(msj.value); };
+  msj.oninput = actualizarWa; actualizarWa();
+  $('#dif-copiar', m.el).onclick = () => copiar(msj.value, msj);
+  const pintar = () => { dibujarImagenReemplazo(cv, parte, tema); $$('[data-tema]', m.el).forEach(b => b.setAttribute('aria-pressed', b.dataset.tema === tema)); };
+  $$('[data-tema]', m.el).forEach(b => b.onclick = () => { tema = b.dataset.tema; pintar(); });
+  (document.fonts?.load('900 40px Archivo') || Promise.resolve()).then(pintar, pintar); pintar();
+  const nombreArchivo = `reemplazo-${slugSimple(n.actividad || ROL_CORTO[n.rol])}-${n.fecha}.png`;
+  const archivo = () => new Promise(r => cv.toBlob(b => r(new File([b], nombreArchivo, { type: 'image/png' })), 'image/png'));
+  $('#dif-bajar', m.el).onclick = async () => { const f = await archivo(); const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = nombreArchivo; a.click(); };
+  $('#dif-compartir', m.el).onclick = async () => {
+    const f = await archivo();
+    if (navigator.canShare?.({ files: [f] })) { try { await navigator.share({ files: [f], text: msj.value }); } catch { /* canceló */ } }
+    else { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = nombreArchivo; a.click(); toast('Imagen descargada: adjuntala en WhatsApp'); }
+  };
+}
+const slugSimple = t => sinTildes(t).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 // ---------- Corrección automática de la grilla ----------
 // Las clases duran 1 hora: si quedó cargada una clase de varias horas (de antes, o a mano) se parte sola
@@ -1470,7 +1545,7 @@ function vReemplazos(v) {
             <td class="mono">${n.generico ? '<span class="pill pendiente">a confirmar</span>' : `${n.desde}–${n.hasta}`}</td>
             <td>${esc(n.rol === 'clases' ? queCubre(n) : ROL_CORTO[n.rol])}</td>
             <td class="td-cubre">${quienesCubren(n)}${n.falta.length && n.rs.length ? ` <span class="pill sin">falta <span class="mono">${n.falta.map(x => x.join('–')).join(', ')}</span></span>` : ''}
-              ${n.falta.length ? selectorCubre(n) : `<button class="btn sm ghost" data-quitar-todos="${n.rs.map(r => r.id).join(',')}">Quitar</button>`}</td></tr>`).join('')}</tbody></table></div>` : ''}
+              ${n.falta.length ? `${selectorCubre(n)}<button class="btn sm ghost" data-difundir="${ndDe(n)}" title="Pedir por WhatsApp" aria-label="Pedir por WhatsApp">📣</button>` : `${n.rs.filter(r => !esLibre(r) && ((!r.externo && P(r.reemplazo)?.telefono) || r.reemplazoTel)).map(r => `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(!r.externo ? P(r.reemplazo).telefono : r.reemplazoTel, textoConfirmacion(n, nomR(r)))}" title="Confirmarle por WhatsApp">✓ WhatsApp</a>`).join('')}<button class="btn sm ghost" data-quitar-todos="${n.rs.map(r => r.id).join(',')}">Quitar</button>`}</td></tr>`).join('')}</tbody></table></div>` : ''}
         </div>`;
       }).join('') : '<div class="todo-ok">✓ No hay nada para cubrir</div>'}`;
     $$('[data-abrir]', v).forEach(b => b.onclick = () => { const e = b.dataset.abrir; S.abiertos.has(e) ? S.abiertos.delete(e) : S.abiertos.add(e); render(); });
@@ -1570,7 +1645,7 @@ function htmlNecesidad(n) {
   const partes = rs.length ? `<div class="lista">${rs.map(r => {
     const q = !r.externo && P(r.reemplazo), tel = q?.telefono || r.reemplazoTel;
     return `<div class="item fila-est ${estadoR(r)}"><span>${esLibre(r) ? `De <b class="mono">${r.desde} a ${r.hasta}</b> queda <b>sin profe</b>` : `<b>${esc(nomR(r))}</b>${r.externo ? ' <span class="pill ext">externo</span>' : ''} cubre a ${esc(pilaTit)} de <b class="mono">${r.desde} a ${r.hasta}</b>`}</span>
-      <div class="acciones">${tel ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(tel, textoReemplazo({ ...n, desde: r.desde, hasta: r.hasta }, q || { nombre: r.reemplazoNombre.split(' ')[0] }))}">WhatsApp</a>` : ''}<button class="btn sm ghost" data-quitar-r="${r.id}">Quitar</button></div></div>`;
+      <div class="acciones">${tel && !esLibre(r) ? `<a class="btn sm ghost" target="_blank" rel="noopener" href="${waLink(tel, textoConfirmacion({ ...n, desde: r.desde, hasta: r.hasta }, nomR(r)))}">Confirmarle por WhatsApp</a>` : ''}<button class="btn sm ghost" data-quitar-r="${r.id}">Quitar</button></div></div>`;
   }).join('')}</div>` : '';
   if (!falta.length) return `<div class="nec">${cab}${barra}${partes}</div>`;
 
@@ -1604,7 +1679,7 @@ function htmlNecesidad(n) {
     <b class="nec-preg">¿Quién cubre a ${esc(pilaTit)}${rs.length ? ' lo que falta' : ''}?</b>
     ${filas.length ? `<div class="cand-lista">${filas.join('')}</div>${filas.length > 4 ? `<button class="btn sm ghost" data-mas style="justify-self:start">Ver ${filas.length - 4} más</button>` : ''}`
       : `<div class="aviso mal"><div><b>No hay nadie libre que dé ${esc(queAct(n))} a esa hora.</b><span>Tocá "+ Otra persona" para cargar a alguien (queda guardado en Externos).</span></div></div>`}
-    <div class="acciones" style="justify-content:flex-start"><button class="btn sm ghost" data-manual="${nd}">+ Otra persona</button><button class="btn sm ghost" data-libre="${nd}">Que quede sin profe</button></div></div>`;
+    <div class="acciones" style="justify-content:flex-start"><button class="btn sm" data-difundir="${nd}">📣 Pedir por WhatsApp</button><button class="btn sm ghost" data-manual="${nd}">+ Otra persona</button><button class="btn sm ghost" data-libre="${nd}">Que quede sin profe</button></div></div>`;
 }
 
 // Cubre solo las horas elegidas ("ext|id" para externos o el correo para alguien del staff)
