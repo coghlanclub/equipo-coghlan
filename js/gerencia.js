@@ -158,7 +158,7 @@ function dibujarImagenReemplazo(cv, n, tema) {
   else { x.fillStyle = '#fff'; x.font = F(900, 96); x.fillText(n.desde, 466, 790); x.font = F(500, 48); x.fillStyle = sub; x.fillText('a', 470, 860); x.fillStyle = '#fff'; x.font = F(900, 96); x.fillText(n.hasta, 520, 870); x.font = F(700, 40); x.fillStyle = sub; x.fillText('hs', 800, 870); }
   x.fillStyle = oscuro ? '#1f1e24' : '#c9343d'; caja(80, 1060, 920, 170, 30);
   x.fillStyle = oscuro ? '#43b77d' : '#ffffff'; x.font = F(900, 54); x.fillText(n.rol === 'clases' ? '¿La podés tomar?' : '¿Lo podés tomar?', 120, 1135);
-  x.fillStyle = oscuro ? '#ffffff' : '#ffe1e3'; x.font = F(500, 40); x.fillText('Escribile a gerencia y queda confirmada', 120, 1195);
+  x.fillStyle = oscuro ? '#ffffff' : '#ffe1e3'; x.font = F(500, 40); x.fillText('Escribile por privado a gerencia', 120, 1195);
   x.fillStyle = sub; x.font = F(500, 30); x.fillText('Washington 2558 · Coghlan', 80, 1300);
 }
 function abrirDifundir(n0) {

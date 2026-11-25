@@ -407,7 +407,7 @@ export function textoReemplazo(n, p) {
 // Al grupo del staff
 export function textoGrupo(n) {
   const que = n.rol === 'clases' && n.actividad ? `🏋️ *${n.actividad}*${n.sede ? ' · ' + n.sede : ''}` : `🏋️ *${ROLES[n.rol]}*`;
-  return `Hola equipo 👋\nNecesitamos cubrir ${n.rol === 'clases' ? 'una clase' : 'un turno'}:\n\n${que}\n📅 *${fechaLarga(n.fecha)}*\n🕕 *${n.generico ? 'Horario a confirmar' : `De ${n.desde} a ${n.hasta} hs`}*\n\n¿Alguien la puede tomar? Respondé por acá o escribime al privado.\n¡Gracias!\n_Gerencia · Coghlan Club_`;
+  return `Hola equipo 👋\nNecesitamos cubrir ${n.rol === 'clases' ? 'una clase' : 'un turno'}:\n\n${que}\n📅 *${fechaLarga(n.fecha)}*\n🕕 *${n.generico ? 'Horario a confirmar' : `De ${n.desde} a ${n.hasta} hs`}*\n\n¿Alguien la puede tomar? Por favor, respondeme *por privado* (no en el grupo).\n¡Gracias!\n_Gerencia · Coghlan Club_`;
 }
 // Confirmación a quien cubre
 export function textoConfirmacion(n, nombre) {
