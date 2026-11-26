@@ -149,7 +149,12 @@ export function activarFormFicha(el, p = {}) {
     const b = e.target.closest('[data-quitar]'); if (!b) return;
     turnos.splice(+b.dataset.quitar, 1); pintarTurnos();
   });
+  // Si se completó un turno y no se tocó "+ Agregar turno", al guardar se agrega solo (no se pierde)
+  let turnoTocado = false;
+  ['#t-desde', '#t-hasta', '#t-rol'].forEach(s => $(s, el)?.addEventListener('change', () => { turnoTocado = true; }));
+  $('#t-dias', el)?.addEventListener('change', () => { turnoTocado = true; });
   $('#t-agregar', el).onclick = () => {
+    turnoTocado = false;
     const dias = $$('#t-dias input:checked', el).map(i => +i.value);
     const desde = $('#t-desde', el).value, hasta = $('#t-hasta', el).value, rol = $('#t-rol', el).value;
     if (!dias.length || !desde || !hasta || !rol) return toast('Elegí días, horario y rol', true);
@@ -196,6 +201,7 @@ export function activarFormFicha(el, p = {}) {
 
   return {
     leer() {
+      if (turnoTocado && $('#t-rol', el)?.value) $('#t-agregar', el).click();
       const d = {
         nombre: $('#f-nombre', el).value.trim(),
         apellido: $('#f-apellido', el).value.trim(),
@@ -206,6 +212,8 @@ export function activarFormFicha(el, p = {}) {
       d.actividades = d.roles.includes('clases') ? acts() : [];
       d.clases = d.roles.includes('clases') ? $$('input[name=clase]:checked', el).map(i => i.value) : [];
       d.clasesNuevas = d.roles.includes('clases') ? nuevas.map(c => ({ ...c })) : [];
+      // Un turno de sala (o recepción, limpieza) suma ese rol a la persona: nunca se descarta en silencio
+      for (const t of turnos) if (!d.roles.includes(t.rol)) d.roles.push(t.rol);
       d.horarios = turnos.filter(t => d.roles.includes(t.rol));
       d.dni = $('#f-dni', el).value.replace(/\D/g, '');
       d.direccion = $('#f-dir', el).value.trim();
