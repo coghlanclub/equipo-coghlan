@@ -489,3 +489,7 @@ button.dt { cursor: pointer; }
 .turno-falta { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--surface-2); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
 .turno-falta[aria-pressed="true"] { border: 2px dashed var(--accent); background: var(--accent-soft); color: var(--accent); }
 .turno-falta .tf-x { width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid currentColor; display: grid; place-items: center; flex: none; font-weight: 700; }
+
+.gr-acc { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--surface-2); }
+.dif-bloque { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.dif-bloque:first-of-type { border-top: 0; padding-top: 0; }

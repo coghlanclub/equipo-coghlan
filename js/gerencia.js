@@ -4,7 +4,7 @@ import {
   esc, ROLES, ROL_CORTO, ROLES_TURNO, DIAS, DIAS_CORTOS, DIAS_LABORABLES, MESES, ESTADOS, SEDES, GRILLA_BASE, ACTIVIDADES_BASE,
   hoy, iso, deIso, mesDe, sumarDias, rangoTexto, diasDeTrabajo, textoDias, fechaLarga, fechaCorta, min, seSolapan, nombreCompleto, iniciales,
   activo, agenda, bloquesAgenda, resumenSemana, necesidades, tipoReemplazo, cubierto, reemplazosDe, faltaCubrir, candidatos, huecos, conflictos, ausenteEn, jornadas, resumenAsistencia,
-  horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, textoGrupo, textoConfirmacion, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
+  horaDe, fmtMin, ms, mailto, mailRespuesta, waLink, textoReemplazo, textoGrupo, textoConfirmacion, textoGrupoVarias, textoReemplazoVarias, queCubre, idClase, TOLERANCIA_TARDE, minutosDelDia, pad, sumarMin, DURACION_CLASE,
   faltasSinAviso, sinCorreo, rangoFechas, normTel, GRILLA_VERSION, GRILLA_RENOMBRES, textoHoras, tocaHoras, HORARIO_CLUB, hhmm, FRANJAS, enClasesDeUnaHora,
 } from './logica.js';
 import { enviarCorreo, envioAutomatico, destinos } from './correo.js';
@@ -130,6 +130,101 @@ function resolver(n) {
 
 // ---------- Pedir reemplazo por WhatsApp: mensaje listo e imagen para compartir ----------
 document.addEventListener('click', e => { const b = e.target.closest('[data-difundir]'); if (b) { e.preventDefault(); abrirDifundir(JSON.parse(b.dataset.difundir)); } });
+document.addEventListener('click', e => { const b = e.target.closest('[data-difundir-profe]'); if (b) { e.preventDefault(); abrirDifundirProfe(b.dataset.difundirProfe); } });
+// Todo lo que falta cubrir de un profe, agrupado por actividad (las fechas ya cubiertas no van; de las cubiertas en parte, solo lo que falta)
+function pendientesPorActividad(email) {
+  const necs = necesidadesFuturas(hoy(), null).filter(n => n.titular === email);
+  const grupos = {};
+  for (const n of necs) {
+    const falta = faltaCubrir(n, S.reemplazos);
+    if (!falta.length) continue;
+    const k = n.rol === 'clases' ? `c|${n.actividad}|${n.sede}` : `t|${n.rol}`;
+    const g = grupos[k] = grupos[k] || { rol: n.rol, actividad: n.actividad, sede: n.sede, filas: [], necs: [] };
+    g.necs.push(n);
+    if (n.generico) g.filas.push({ fecha: n.fecha, desde: n.desde, hasta: n.hasta, generico: true });
+    else for (const [d, h] of falta) g.filas.push({ fecha: n.fecha, desde: d, hasta: h });
+  }
+  // Clases seguidas el mismo día van juntas (08–09 y 09–10 = 08–10)
+  for (const g of Object.values(grupos)) {
+    g.filas.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.desde.localeCompare(b.desde));
+    g.filas = g.filas.reduce((o, f) => { const l = o[o.length - 1]; if (l && !f.generico && l.fecha === f.fecha && l.hasta === f.desde) l.hasta = f.hasta; else o.push({ ...f }); return o; }, []);
+  }
+  return Object.values(grupos);
+}
+function dibujarImagenVarias(cv, g, tema) {
+  if (g.filas.length === 1) return dibujarImagenReemplazo(cv, { ...g, ...g.filas[0] }, tema);
+  const x = cv.getContext('2d'), oscuro = tema !== 'roja';
+  const F = (w, s) => `${w} ${s}px Archivo, "Helvetica Neue", Arial, sans-serif`;
+  const caja = (X, Y, W, H, R) => { x.beginPath(); x.roundRect(X, Y, W, H, R); x.fill(); };
+  const bg = oscuro ? '#141317' : '#e5414b', sub = oscuro ? '#a5a2ad' : '#ffe1e3', acc = oscuro ? '#e5414b' : '#141317';
+  x.fillStyle = bg; x.fillRect(0, 0, 1080, 1350);
+  x.save(); x.globalAlpha = oscuro ? 0.09 : 0.12; x.fillStyle = oscuro ? '#e5414b' : '#ffffff';
+  for (let i = 0; i < 6; i++) { x.beginPath(); x.moveTo(620 + i * 90, 0); x.lineTo(700 + i * 90, 0); x.lineTo(400 + i * 90, 1350); x.lineTo(320 + i * 90, 1350); x.fill(); }
+  x.restore();
+  x.font = F(700, 46); x.fillStyle = '#fff'; x.fillText('coghlan', 80, 120); const w = x.measureText('coghlan').width;
+  x.fillStyle = acc; x.fillText('club', 80 + w, 120); x.font = F(700, 26); x.fillStyle = sub; x.fillText('40 AÑOS', 80 + w + x.measureText('club').width + 70, 118);
+  x.fillStyle = acc; caja(80, 180, 520, 70, 35); x.fillStyle = '#fff'; x.font = F(900, 32); x.fillText(g.rol === 'clases' ? 'CLASES PARA CUBRIR' : 'TURNOS PARA CUBRIR', 114, 226);
+  const act = (g.rol === 'clases' && g.actividad ? g.actividad : ROL_CORTO[g.rol]).toUpperCase();
+  let s = 130; do { x.font = F(900, s); s -= 4; } while (x.measureText(act).width > 920 && s > 40);
+  x.fillStyle = '#fff'; x.fillText(act, 74, 380);
+  x.font = F(500, 46); x.fillStyle = sub; x.fillText(g.sede ? 'Sede ' + g.sede : ROLES[g.rol], 80, 445);
+  const max = 6, filas = g.filas.slice(0, max), alto = 104;
+  filas.forEach((f, i) => {
+    const y = 500 + i * (alto + 14), d = deIso(f.fecha);
+    x.fillStyle = oscuro ? '#24232a' : '#c9343d'; caja(80, y, 920, alto, 22);
+    x.fillStyle = oscuro ? '#ffffff' : '#141317'; caja(80, y, 150, alto, 22);
+    x.fillStyle = oscuro ? '#141317' : '#ffffff'; x.textAlign = 'center';
+    x.font = F(800, 24); x.fillText(DIAS_LARGOS[d.getDay()].slice(0, 3), 155, y + 38); x.font = F(900, 46); x.fillText(`${d.getDate()}/${d.getMonth() + 1}`, 155, y + 86); x.textAlign = 'left';
+    x.fillStyle = '#fff'; x.font = F(800, 52); x.fillText(f.generico ? 'Horario a confirmar' : `${f.desde} a ${f.hasta} hs`, 260, y + 70);
+  });
+  if (g.filas.length > max) { x.fillStyle = sub; x.font = F(700, 36); x.fillText(`y ${g.filas.length - max} fecha(s) más`, 80, 500 + max * (alto + 14) + 20); }
+  x.fillStyle = oscuro ? '#1f1e24' : '#c9343d'; caja(80, 1140, 920, 130, 30);
+  x.fillStyle = oscuro ? '#43b77d' : '#ffffff'; x.font = F(900, 46); x.fillText('¿Podés tomar alguna?', 120, 1196);
+  x.fillStyle = oscuro ? '#ffffff' : '#ffe1e3'; x.font = F(500, 34); x.fillText('Escribile por privado a gerencia', 120, 1244);
+  x.fillStyle = sub; x.font = F(500, 28); x.fillText('Washington 2558 · Coghlan', 80, 1315);
+}
+function abrirDifundirProfe(email) {
+  const grupos = pendientesPorActividad(email);
+  if (!grupos.length) return toast('Ya está todo cubierto');
+  const temas = grupos.map(() => 'oscura');
+  // Quién puede: staff que da esa actividad (no el titular, activo, sin vacaciones esos días) y externos de esa actividad, con cuántas fechas tiene libres
+  const candidatosDe = g => {
+    const libres = c => g.necs.filter(n => candidatos(n, S.personal, S.ausencias, S.reemplazos, S.clases).some(x => x.p.email === c)).length;
+    const st = activos().filter(p => p.email !== email && p.telefono && (g.rol === 'clases' ? (p.actividades || []).includes(g.actividad) : (p.roles || []).includes(g.rol)))
+      .map(p => ({ nombre: nombreCompleto(p), tel: p.telefono, libre: libres(p.email), ext: false })).filter(c => c.libre);
+    const ex = externos().filter(x => x.tel && (x.acts || []).includes(g.rol === 'clases' ? g.actividad : ACT_ROL[g.rol])).map(x => ({ nombre: x.nombre, tel: x.tel, libre: null, ext: true }));
+    return [...st.sort((a, b) => b.libre - a.libre), ...ex].slice(0, 8);
+  };
+  const m = modal(`${cabModal('Pedir reemplazos por WhatsApp')}
+    <p class="sub">Falta <b>${esc(nom(email))}</b>. ${grupos.length > 1 ? `Tiene <b>${grupos.length} actividades</b> sin cubrir: hay un mensaje y una imagen por cada una.` : 'Va un solo mensaje con todas las fechas que faltan.'} Las fechas que ya están cubiertas no aparecen.</p>
+    ${grupos.map((g, i) => `<div class="dif-bloque">
+      <h3>${esc(g.rol === 'clases' ? `${g.actividad}${g.sede ? ' · ' + g.sede : ''}` : ROLES[g.rol])} <span class="pill sin">${g.filas.length} ${g.filas.length === 1 ? 'fecha' : 'fechas'}</span></h3>
+      <div class="difundir">
+        <div class="dif-col"><h4>Mensaje para el grupo</h4>
+          <textarea id="dm-${i}" rows="${Math.min(16, 9 + g.filas.length)}">${esc(textoGrupoVarias(g))}</textarea>
+          <div class="acciones" style="justify-content:flex-start"><button class="btn ghost sm" data-dm-copiar="${i}">Copiar mensaje</button><a class="btn sm" data-dm-wa="${i}" target="_blank" rel="noopener">Abrir WhatsApp y elegir el grupo</a></div>
+          <h4>O escribile a cada uno</h4>
+          ${(() => { const cs = candidatosDe(g); return cs.length ? `<div class="lista">${cs.map(c => `<div class="item"><span><b>${esc(c.nombre)}</b> <span class="sub">${c.ext ? 'Externo' : `Staff · libre ${c.libre} de ${g.necs.length}`}</span></span><a class="btn sm ${c.ext ? 'ext' : 'ghost'}" target="_blank" rel="noopener" href="${waLink(c.tel, textoReemplazoVarias(g, { nombre: c.nombre }))}">WhatsApp</a></div>`).join('')}</div>` : '<p class="sub">No hay nadie con teléfono cargado que dé esta actividad. Mandalo al grupo.</p>'; })()}</div>
+        <div class="dif-col"><h4>Imagen</h4>
+          <div class="seg" role="group" aria-label="Diseño"><button data-dm-tema="${i}|oscura" aria-pressed="true">Oscura</button><button data-dm-tema="${i}|roja" aria-pressed="false">Roja</button></div>
+          <canvas id="dm-img-${i}" width="1080" height="1350"></canvas>
+          <div class="acciones" style="justify-content:flex-start"><button class="btn sm" data-dm-compartir="${i}">Compartir imagen</button><button class="btn ghost sm" data-dm-bajar="${i}">Descargar</button></div></div>
+      </div></div>`).join('')}
+    <div class="modal-pie"><button class="btn ghost" data-cerrar>Listo</button></div>`, { ancho: true });
+  const pintar = i => { dibujarImagenVarias($('#dm-img-' + i, m.el), grupos[i], temas[i]); $$(`[data-dm-tema^="${i}|"]`, m.el).forEach(b => b.setAttribute('aria-pressed', b.dataset.dmTema === `${i}|${temas[i]}`)); };
+  grupos.forEach((g, i) => {
+    const ta = $('#dm-' + i, m.el), wa = $(`[data-dm-wa="${i}"]`, m.el);
+    const act = () => { wa.href = 'https://wa.me/?text=' + encodeURIComponent(ta.value); }; ta.oninput = act; act();
+    $(`[data-dm-copiar="${i}"]`, m.el).onclick = () => copiar(ta.value, ta);
+    const nombreArchivo = `reemplazos-${slugSimple(g.actividad || ROL_CORTO[g.rol])}.png`;
+    const archivo = () => new Promise(r => $('#dm-img-' + i, m.el).toBlob(b => r(new File([b], nombreArchivo, { type: 'image/png' })), 'image/png'));
+    const bajar = async () => { const f = await archivo(); const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = nombreArchivo; a.click(); };
+    $(`[data-dm-bajar="${i}"]`, m.el).onclick = bajar;
+    $(`[data-dm-compartir="${i}"]`, m.el).onclick = async () => { const f = await archivo(); if (navigator.canShare?.({ files: [f] })) { try { await navigator.share({ files: [f], text: ta.value }); } catch { /* canceló */ } } else { await bajar(); toast('Imagen descargada: adjuntala en WhatsApp'); } };
+    (document.fonts?.load('900 40px Archivo') || Promise.resolve()).then(() => pintar(i), () => pintar(i)); pintar(i);
+  });
+  $$('[data-dm-tema]', m.el).forEach(b => b.onclick = () => { const [i, t] = b.dataset.dmTema.split('|'); temas[+i] = t; pintar(+i); });
+}
 const DIAS_LARGOS = ['DOMINGO', 'LUNES', 'MARTES', 'MIÉRCOLES', 'JUEVES', 'VIERNES', 'SÁBADO'];
 function dibujarImagenReemplazo(cv, n, tema) {
   const x = cv.getContext('2d'), oscuro = tema !== 'roja';
@@ -1540,6 +1635,7 @@ function vReemplazos(v) {
             <div class="gr-tx"><b>${esc(g.nombre)}</b><span class="sub">${esc(rangos)} · ${g.necs.length} ${g.necs.length === 1 ? 'turno' : 'turnos'}</span></div>
             <span class="gr-dots">${g.necs.slice(0, 16).map(n => `<i class="est-${n.falta.length ? 'falta' : estadoR(n.rs[0])}" title="${esc(fechaCorta(n.fecha).slice(0, 5) + ' ' + n.desde)}"></i>`).join('')}</span>
             <span class="pill ${faltan ? 'sin' : 'cubierto'}">${faltan ? `Faltan ${faltan}` : '✓ Cubierto'}</span><span class="gr-flecha">${abierto ? '▲' : '▼'}</span></button>
+          ${abierto && g.necs.some(n => n.falta.length) ? `<div class="gr-acc"><button class="btn sm" data-difundir-profe="${esc(g.email)}">📣 Pedir todas por WhatsApp</button><span class="sub">Un mensaje por actividad, solo con lo que falta cubrir</span></div>` : ''}
           ${abierto ? `<div class="tabla-wrap"><table class="tabla-rem"><tbody>${g.necs.map(n => `<tr class="${n.falta.length ? 'tr-falta' : ''}">
             <td><b>${DIAS_CORTOS[n.dia]} ${fechaCorta(n.fecha).slice(0, 5)}</b></td>
             <td class="mono">${n.generico ? '<span class="pill pendiente">a confirmar</span>' : `${n.desde}–${n.hasta}`}</td>

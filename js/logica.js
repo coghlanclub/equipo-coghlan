@@ -410,6 +410,17 @@ export function textoGrupo(n) {
   return `Hola equipo 👋\nNecesitamos cubrir ${n.rol === 'clases' ? 'una clase' : 'un turno'}:\n\n${que}\n📅 *${fechaLarga(n.fecha)}*\n🕕 *${n.generico ? 'Horario a confirmar' : `De ${n.desde} a ${n.hasta} hs`}*\n\n¿Alguien la puede tomar? Por favor, respondeme *por privado* (no en el grupo).\n¡Gracias!\n_Gerencia · Coghlan Club_`;
 }
 // Confirmación a quien cubre
+// Varias fechas de la misma actividad: filas = [{ fecha, desde, hasta, generico }]
+const filaMsj = f => `📅 *${fechaLarga(f.fecha).replace(/ de [a-z]+$/i, m => m)}* · ${f.generico ? 'horario a confirmar' : `${f.desde} a ${f.hasta} hs`}`;
+const queVarias = g => g.rol === 'clases' && g.actividad ? `*${g.actividad}*${g.sede ? ' en el ' + g.sede : ''}` : `*${ROLES[g.rol]}*`;
+export function textoGrupoVarias(g) {
+  if (g.filas.length === 1) return textoGrupo({ ...g, ...g.filas[0] });
+  return `Hola equipo 👋\nNecesitamos cubrir ${queVarias(g)} estos días:\n\n${g.filas.map(filaMsj).join('\n')}\n\nSe puede tomar uno o varios. Por favor, respondeme *por privado* (no en el grupo) diciendo cuáles.\n¡Gracias!\n_Gerencia · Coghlan Club_`;
+}
+export function textoReemplazoVarias(g, p) {
+  if (g.filas.length === 1) return textoReemplazo({ ...g, ...g.filas[0] }, p);
+  return `Hola ${(p.nombre || '').split(' ')[0]}, ¿cómo estás?\nTe escribo de la gerencia de Coghlan Club. Necesitamos cubrir ${queVarias(g)} estos días:\n\n${g.filas.map(filaMsj).join('\n')}\n\n¿Podés tomar alguno? Avisame cuáles y te los confirmo. ¡Muchas gracias!`;
+}
 export function textoConfirmacion(n, nombre) {
   return `¡Gracias, ${(nombre || '').split(' ')[0]}! 🙌\nTe confirmo el reemplazo: ${queMsj(n)}, *${diaMsj(n)} ${horaMsj(n)}*.\nYa quedó cargado en la app.`;
 }
