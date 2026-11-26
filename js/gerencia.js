@@ -301,7 +301,29 @@ const slugSimple = t => sinTildes(t).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/
 // ---------- Corrección automática de la grilla ----------
 // Las clases duran 1 hora: si quedó cargada una clase de varias horas (de antes, o a mano) se parte sola
 // en clases de 1 hora, y si una persona tiene la misma clase repetida a la misma hora se deja una sola.
-let corrigiendo = false, limpiandoCenso = false, guardandoExt = false, actualizandoGrilla = false, vinculando = false, uniendo = false;
+let corrigiendo = false, limpiandoCenso = false, guardandoExt = false, actualizandoGrilla = false, vinculando = false, uniendo = false, limpiandoAus = false;
+// Pedidos repetidos (misma persona, mismo tipo, mismas fechas y horarios): queda uno solo.
+// Se conserva el aprobado y el que tiene más reemplazos; los reemplazos de los otros pasan al que queda.
+const claveAus = a => [a.email, a.tipo, a.desde, a.hasta, JSON.stringify(a.horas || [])].join('|');
+function ausenciasRepetidas() {
+  const grupos = {};
+  for (const a of S.ausencias.filter(a => a.estado !== 'rechazada')) (grupos[claveAus(a)] = grupos[claveAus(a)] || []).push(a);
+  const rank = a => (a.estado === 'aprobada' ? 1000 : 0) + S.reemplazos.filter(r => r.ausenciaId === a.id).length;
+  return Object.values(grupos).filter(g => g.length > 1).map(g => { const [queda, ...sobran] = g.sort((x, y) => rank(y) - rank(x) || ms(x.creado) - ms(y.creado)); return { queda, sobran }; });
+}
+async function unirAusenciasRepetidas() {
+  const rep = ausenciasRepetidas();
+  if (!rep.length) return;
+  limpiandoAus = true;
+  const ops = [];
+  for (const { queda, sobran } of rep) for (const a of sobran) {
+    for (const r of S.reemplazos.filter(r => r.ausenciaId === a.id)) ops.push({ c: 'reemplazos', id: r.id, data: { ausenciaId: queda.id }, merge: true });
+    ops.push({ c: 'ausencias', id: a.id, borrar: true });
+  }
+  try { await lote(ops); toast(`Había pedidos repetidos: quedó uno solo de ${rep.map(x => `${(x.queda.nombre || nom(x.queda.email)).split(' ')[0]} (${rangoTexto(x.queda.desde, x.queda.hasta)})`).join(', ')}.`); }
+  catch (e) { console.error(e); }
+  limpiandoAus = false;
+}
 const OFICIALES = new Set(GRILLA_BASE.map(c => c.id));
 // ¿Es la misma actividad aunque esté escrita distinto? ("Indoor cycle" = "Indoor Cycle", "Entrenamiento Funcional" ≈ "Funcional")
 const normAct = a => sinTildes(a).replace(/[^a-z0-9ñ ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -427,6 +449,7 @@ async function corregirGrilla() {
   if (S.configListo && (S.config.grillaVersion || 0) < GRILLA_VERSION && !actualizandoGrilla) return actualizarGrillaOficial();
   if (!vinculando) vincularCenso();
   if (!uniendo) unirClasesDeProfes();
+  if (!limpiandoAus) unirAusenciasRepetidas();
   const largas = S.clases.filter(c => c.desde && c.hasta && min(c.hasta) - min(c.desde) > DURACION_CLASE);
   const vistas = new Map(), repetidas = [];
   for (const c of [...S.clases].filter(c => !largas.includes(c)).sort((a, b) => (a.profesor ? 0 : 1) - (b.profesor ? 0 : 1) || a.id.localeCompare(b.id))) {
@@ -1561,6 +1584,8 @@ function cargarAusencia(email = '', pre = {}) {
   $('#ca-ok', m.el).onclick = async () => {
     const e = $('#ca-p', m.el).value, desde = $('#ca-d', m.el).value, hasta = $('#ca-h', m.el).value;
     if (!e || !desde || !hasta || hasta < desde) return toast('Revisá persona y fechas', true);
+    const ya = S.ausencias.find(a => a.email === e && a.estado !== 'rechazada' && a.desde === desde && a.hasta === hasta);
+    if (ya) return toast(`${nom(e).split(' ')[0]} ya tiene cargado ese pedido (${rangoTexto(desde, hasta)}, ${ESTADOS[ya.estado].toLowerCase()})`, true);
     const box = $('#ca-hs', m.el), todas = box.dataset.hs ? JSON.parse(box.dataset.hs) : [];
     const horas = elegidos && desde === hasta && elegidos.size < todas.length ? todas.filter(([x]) => elegidos.has(x)) : null;
     if (elegidos && !elegidos.size) return toast('Marcá al menos un horario', true);
