@@ -301,7 +301,38 @@ const slugSimple = t => sinTildes(t).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/
 // ---------- Corrección automática de la grilla ----------
 // Las clases duran 1 hora: si quedó cargada una clase de varias horas (de antes, o a mano) se parte sola
 // en clases de 1 hora, y si una persona tiene la misma clase repetida a la misma hora se deja una sola.
-let corrigiendo = false, limpiandoCenso = false, guardandoExt = false, actualizandoGrilla = false, vinculando = false, uniendo = false, limpiandoAus = false;
+let corrigiendo = false, limpiandoCenso = false, guardandoExt = false, actualizandoGrilla = false, vinculando = false, uniendo = false, limpiandoAus = false, aplicandoParches = false;
+// Cambios que pidió gerencia y se cargan solos una vez (queda anotado en config para no repetirlos)
+const PARCHES = [
+  { id: 'gero-sala-lun-mie-19-21', quien: 'Gero', busca: p => ['gero', 'geronimo'].includes(sinTildes(p.nombre).split(' ')[0]),
+    horarios: [{ dia: 1, desde: '19:00', hasta: '21:00', rol: 'musculacion' }, { dia: 3, desde: '19:00', hasta: '21:00', rol: 'musculacion' }],
+    texto: 'lunes y miércoles de 19:00 a 21:00 en la sala de musculación' },
+];
+let avisoParche = {};
+async function aplicarParches() {
+  const hechos = S.config.parches || [];
+  const pendientes = PARCHES.filter(x => !hechos.includes(x.id));
+  if (!pendientes.length) return;
+  aplicandoParches = true;
+  for (const x of pendientes) {
+    let gente = S.personal.filter(p => p.estado !== 'inactivo' && x.busca(p));
+    // Si hay dos fichas con ese nombre, la que ya trabaja en la sala
+    if (gente.length > 1) { const sala = gente.filter(p => (p.roles || []).includes('musculacion') || (p.horarios || []).some(h => h.rol === 'musculacion')); if (sala.length) gente = sala; }
+    if (gente.length !== 1) { if (!avisoParche[x.id]) { avisoParche[x.id] = true; toast(`No pude cargar a ${x.quien} (${x.texto}): ${gente.length ? 'hay más de una ficha con ese nombre' : 'no encontré su ficha en Staff'}.`, true); } continue; }
+    const p = gente[0], hs = [...(p.horarios || [])];
+    for (const h of x.horarios) if (!hs.some(y => y.dia === h.dia && y.rol === h.rol && min(y.desde) <= min(h.desde) && min(y.hasta) >= min(h.hasta))) hs.push(h);
+    hs.sort((a, b) => a.dia - b.dia || a.desde.localeCompare(b.desde));
+    try {
+      await lote([
+        { c: 'personal', id: p.email, data: { horarios: hs, roles: [...new Set([...(p.roles || []), ...x.horarios.map(h => h.rol)])] }, merge: true },
+        { c: 'config', id: 'general', data: { parches: [...hechos, x.id] }, merge: true },
+      ]);
+      hechos.push(x.id);
+      toast(`Listo: ${nombreCompleto(p)} quedó ${x.texto}.`);
+    } catch (e) { console.error(e); }
+  }
+  aplicandoParches = false;
+}
 // Pedidos repetidos (misma persona, mismo tipo, mismas fechas y horarios): queda uno solo.
 // Se conserva el aprobado y el que tiene más reemplazos; los reemplazos de los otros pasan al que queda.
 const claveAus = a => [a.email, a.tipo, a.desde, a.hasta, JSON.stringify(a.horas || [])].join('|');
@@ -450,6 +481,7 @@ async function corregirGrilla() {
   if (!vinculando) vincularCenso();
   if (!uniendo) unirClasesDeProfes();
   if (!limpiandoAus) unirAusenciasRepetidas();
+  if (S.configListo && !aplicandoParches) aplicarParches();
   const largas = S.clases.filter(c => c.desde && c.hasta && min(c.hasta) - min(c.desde) > DURACION_CLASE);
   const vistas = new Map(), repetidas = [];
   for (const c of [...S.clases].filter(c => !largas.includes(c)).sort((a, b) => (a.profesor ? 0 : 1) - (b.profesor ? 0 : 1) || a.id.localeCompare(b.id))) {
